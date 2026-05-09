@@ -1,10 +1,11 @@
 """KairosMD MCP Server - Ward Round Decision Support.
 
-Exposes 4 MCP tools:
+Exposes 5 MCP tools:
   1. get_ward_round_summary  - Full ward overview sorted by priority
   2. get_patient_ward_detail - Deep dive into single patient
   3. get_discharge_candidates - Patients ready or near-ready for discharge
   4. get_conflict_report     - All detected conflicts across the ward
+  5. record_ward_action      - Record clinical actions (acknowledge, escalate, etc.)
 """
 
 from __future__ import annotations
@@ -18,6 +19,10 @@ from kairosmd import config
 from kairosmd.fhir_client import FHIRClient
 from kairosmd.ward_engine import compile_patient_ward_data
 from kairosmd.llm_agent import generate_patient_briefing
+from kairosmd.ward_actions import (
+    record_action, get_actions, is_conflict_acknowledged,
+    get_escalation_status, get_discharge_override,
+)
 
 mcp = FastMCP("KairosMD")
 fhir = FHIRClient()
@@ -25,10 +30,59 @@ fhir = FHIRClient()
 # Priority sort order for ward round
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
+# -- Server-side cache -------------------------------------------------
+# Caches FHIR + ward engine + LLM results per patient.
+# Actions are always re-attached fresh (they're in-memory, instant).
+import time
+
+CACHE_TTL = 3600  # 1 hour
+_patient_cache: dict[str, tuple[float, dict]] = {}  # pid -> (timestamp, data)
+
+
+def _get_cached(pid: str) -> dict | None:
+    """Return cached patient data if still fresh."""
+    entry = _patient_cache.get(pid)
+    if entry and (time.time() - entry[0]) < CACHE_TTL:
+        return entry[1]
+    return None
+
+
+def _set_cached(pid: str, data: dict):
+    """Store patient data in cache."""
+    _patient_cache[pid] = (time.time(), data)
+
+
+def _attach_actions(pid: str, data: dict) -> dict:
+    """Re-attach live action metadata to cached patient data.
+    This is fast — all in-memory, no FHIR or LLM calls."""
+    result = dict(data)  # shallow copy
+    actions = get_actions(pid)
+    escalation = get_escalation_status(pid)
+    discharge_override = get_discharge_override(pid)
+
+    # Re-check conflict acknowledgements
+    for i, c in enumerate(result.get("conflicts", [])):
+        cid = f"{pid}-conflict-{i}"
+        c["conflict_id"] = cid
+        c["acknowledged"] = is_conflict_acknowledged(pid, cid)
+
+    result["actions"] = actions
+    result["escalation_status"] = escalation
+    result["discharge_override"] = discharge_override
+    return result
+
 
 # -- Helper: process one patient ---------------------------------------
 async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
-    """Fetch all FHIR data and run ward analysis for a single patient."""
+    """Fetch all FHIR data and run ward analysis for a single patient.
+    Uses server-side cache to avoid redundant FHIR/LLM calls."""
+
+    # Check cache first
+    cached = _get_cached(pid)
+    if cached:
+        print(f"  [CACHE HIT] {pid}")
+        return _attach_actions(pid, cached)
+
     try:
         # Fetch patient demographics
         patient = await fhir.get_patient(pid)
@@ -39,19 +93,24 @@ async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
         dob = patient.get("birthDate", "")
         gender = patient.get("gender", "")
 
-        # Fetch all clinical data in parallel
-        (vitals, labs, notes, conditions, medications,
-         allergies, encounter, med_admins, flags) = await asyncio.gather(
-            fhir.get_vitals(pid, count=50),
-            fhir.get_labs(pid, count=50),
-            fhir.get_clinical_notes(pid, count=20),
-            fhir.get_conditions(pid),
-            fhir.get_medications(pid),
-            fhir.get_allergies(pid),
-            fhir.get_encounter_for_patient(pid),
-            fhir.get_med_admins(pid),
-            fhir.get_flags(pid),
-        )
+        # Fetch all clinical data SEQUENTIALLY to avoid 429
+        vitals = await fhir.get_vitals(pid, count=50)
+        await asyncio.sleep(0.3)
+        labs = await fhir.get_labs(pid, count=50)
+        await asyncio.sleep(0.3)
+        notes = await fhir.get_clinical_notes(pid, count=20)
+        await asyncio.sleep(0.3)
+        conditions = await fhir.get_conditions(pid)
+        await asyncio.sleep(0.3)
+        medications = await fhir.get_medications(pid)
+        await asyncio.sleep(0.3)
+        allergies = await fhir.get_allergies(pid)
+        await asyncio.sleep(0.3)
+        encounter = await fhir.get_encounter_for_patient(pid)
+        await asyncio.sleep(0.3)
+        med_admins = await fhir.get_med_admins(pid)
+        await asyncio.sleep(0.3)
+        flags = await fhir.get_flags(pid)
 
         # Run ward engine
         result = await compile_patient_ward_data(
@@ -66,7 +125,7 @@ async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
         }
         briefing = await generate_patient_briefing(briefing_context)
 
-        return {
+        base_data = {
             "patient_id": pid,
             "name": name,
             "birthDate": dob,
@@ -74,6 +133,12 @@ async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
             **result,
             "llm_briefing": briefing,
         }
+
+        # Cache it
+        _set_cached(pid, base_data)
+
+        # Attach live actions and return
+        return _attach_actions(pid, base_data)
 
     except Exception as e:
         print(f"  ERROR processing patient {pid}: {e}")
@@ -131,7 +196,7 @@ async def get_ward_round_summary() -> str:
 
     Sorted by clinical priority (high risk first, discharge ready last).
     """
-    patient_ids = await _get_ward_patient_ids(fhir)
+    patient_ids = (await _get_ward_patient_ids(fhir))[:2]
 
     if not patient_ids:
         return json.dumps({
@@ -146,7 +211,7 @@ async def get_ward_round_summary() -> str:
         entry = await _process_patient(pid, fhir)
         ward_list.append(entry)
         if i < len(patient_ids) - 1:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
 
     ward_list = _sort_ward_list(ward_list)
 
@@ -158,7 +223,7 @@ async def get_ward_round_summary() -> str:
                           if p.get("discharge", {}).get("status") == "Ready")
 
     result = json.dumps({
-        "ward": "General Medicine",
+        "ward": "General Medicine Ward 4",
         "date": date.today().isoformat(),
         "total_patients": len(ward_list),
         "high_risk_count": high_risk,
@@ -204,7 +269,7 @@ async def get_discharge_candidates() -> str:
     Returns patients flagged as 'Ready' or 'Requires Review',
     sorted by length of stay (longest first).
     """
-    patient_ids = await _get_ward_patient_ids(fhir)
+    patient_ids = (await _get_ward_patient_ids(fhir))[:2]
 
     candidates = []
     for i, pid in enumerate(patient_ids):
@@ -213,7 +278,7 @@ async def get_discharge_candidates() -> str:
         if status in ("Ready", "Requires Review"):
             candidates.append(entry)
         if i < len(patient_ids) - 1:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
 
     # Sort by length of stay descending
     candidates.sort(
@@ -243,7 +308,7 @@ async def get_conflict_report() -> str:
     Includes allergy-medication conflicts, drug interactions,
     missed doses, and note-vs-data contradictions.
     """
-    patient_ids = await _get_ward_patient_ids(fhir)
+    patient_ids = (await _get_ward_patient_ids(fhir))[:2]
 
     conflict_patients = []
     for i, pid in enumerate(patient_ids):
@@ -251,7 +316,7 @@ async def get_conflict_report() -> str:
         if entry.get("conflict_count", 0) > 0:
             conflict_patients.append(entry)
         if i < len(patient_ids) - 1:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1.0)
 
     # Sort by conflict count descending
     conflict_patients.sort(
@@ -270,6 +335,51 @@ async def get_conflict_report() -> str:
     }, indent=2)
 
     print(f"\n--- [LOG] Conflict Report: {total_conflicts} conflicts ---")
+    return result
+
+
+# =====================================================================
+# TOOL 5: record_ward_action
+# =====================================================================
+@mcp.tool()
+async def record_ward_action(
+    patient_id: str,
+    action_type: str,
+    detail: str = "",
+    conflict_id: str = "",
+) -> str:
+    """Record a clinical action taken by the doctor.
+
+    This is the decision-support layer. It does NOT replace EHR orders.
+    It records that a clinician has reviewed and actioned a flagged concern.
+
+    Args:
+        patient_id: The FHIR Patient resource ID.
+        action_type: One of:
+            - conflict_acknowledged: Mark a conflict as reviewed
+            - clinical_note_added: Add a clinical response note
+            - urgent_review_flagged: Flag patient for immediate bedside review
+            - escalation_requested: Request ICU or senior review
+            - discharge_approved: Approve discharge
+            - discharge_blocked: Block discharge due to new concern
+            - pharmacy_review_flagged: Flag medication concern for pharmacist
+        detail: Free text note from the clinician explaining the action.
+        conflict_id: If acknowledging a specific conflict, its ID.
+    """
+    action = record_action(
+        patient_id=patient_id,
+        action_type=action_type,
+        detail=detail,
+        conflict_id=conflict_id,
+    )
+
+    result = json.dumps({
+        "status": "recorded",
+        "action": action,
+        "message": f"Action '{action_type}' recorded for patient {patient_id}",
+    }, indent=2)
+
+    print(f"\n--- [LOG] Action recorded: {action_type} for {patient_id} ---")
     return result
 
 

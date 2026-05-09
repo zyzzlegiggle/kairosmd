@@ -50,6 +50,10 @@ class FHIRClient:
                 else:
                     print(f"  [FHIR] 429 on {resource}, max retries reached")
                     return []
+            if resp.status_code == 400:
+                print(f"  [FHIR] 400 Bad Request on {resource}. URL: {resp.url}")
+                print(f"  [FHIR] Response: {resp.text[:200]}")
+                return []
             resp.raise_for_status()
             bundle = resp.json()
             return [e["resource"] for e in bundle.get("entry", [])]
@@ -144,10 +148,13 @@ class FHIRClient:
     # -- Encounters (inpatient) -----------------------------------------
     async def get_encounters(self, patient_id: str = "", status: str = "in-progress") -> list[dict]:
         """Fetch inpatient Encounters. If no patient_id, fetch all active."""
-        params = {"class": "IMP", "status": status, "_count": "50"}
+        params = {"status": status, "_count": "50"}
         if patient_id:
             params["patient"] = patient_id
-        return await self._search("Encounter", params)
+        results = await self._search("Encounter", params)
+        # Client-side filter for IMP class since HAPI may not support class search
+        return [e for e in results
+                if e.get("class", {}).get("code") == "IMP"]
 
     async def get_encounter_for_patient(self, patient_id: str) -> dict | None:
         """Get the current active inpatient encounter for a patient."""
@@ -159,7 +166,6 @@ class FHIRClient:
         """Fetch MedicationAdministration records."""
         return await self._search("MedicationAdministration", {
             "patient": patient_id,
-            "_sort": "-effective-time",
             "_count": str(count),
         })
 
@@ -174,22 +180,24 @@ class FHIRClient:
     async def get_diagnostic_reports(self, patient_id: str) -> list[dict]:
         return await self._search("DiagnosticReport", {
             "patient": patient_id,
-            "_sort": "-date",
             "_count": "20",
         })
 
     # -- CareTeam -------------------------------------------------------
     async def get_care_team(self, patient_id: str) -> list[dict]:
-        return await self._search("CareTeam", {
+        results = await self._search("CareTeam", {
             "patient": patient_id,
-            "status": "active",
             "_count": "5",
         })
+        # Client-side filter for active status
+        return [ct for ct in results if ct.get("status") == "active"] or results
 
     # -- Flags ----------------------------------------------------------
     async def get_flags(self, patient_id: str) -> list[dict]:
-        return await self._search("Flag", {
+        results = await self._search("Flag", {
             "patient": patient_id,
-            "status": "active",
             "_count": "10",
         })
+        # Client-side filter for active status
+        return [f for f in results if f.get("status") == "active"] or results
+
