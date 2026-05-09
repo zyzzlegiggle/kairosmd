@@ -1,7 +1,7 @@
-"""LLM integration for clinical triage via DigitalOcean GenAI Agent Platform.
+"""LLM integration for ward round briefings via DigitalOcean GenAI Agent.
 
-Calls the NVIDIA Nemotron 3 Super 120B model through DO's agent endpoint
-to generate per-patient clinical briefings.
+Calls NVIDIA Nemotron 3 Super 120B through DO's agent endpoint
+to generate per-patient ward round briefings.
 """
 
 import json
@@ -9,18 +9,33 @@ import httpx
 from kairosmd import config
 
 
-def _build_patient_context(patient_data: dict) -> str:
-    """Build a structured text block from compiled FHIR data for a patient."""
+def _build_ward_context(patient_data: dict) -> str:
+    """Build structured text from compiled ward round data for a patient."""
     lines = []
 
     # Demographics
     name = patient_data.get("name", "Unknown")
     dob = patient_data.get("birthDate", "Unknown")
     gender = patient_data.get("gender", "Unknown")
-    reason = patient_data.get("reason_for_visit", "Not specified")
     lines.append(f"PATIENT: {name}, DOB: {dob}, Gender: {gender}")
-    lines.append(f"REASON FOR VISIT: {reason}")
+
+    # Encounter info
+    enc = patient_data.get("encounter", {})
+    if enc:
+        lines.append(f"WARD: {enc.get('ward', '?')}, BED: {enc.get('bed', '?')}")
+        lines.append(f"ADMISSION DATE: {enc.get('admission_date', '?')[:10]}")
+        lines.append(f"ADMITTING DIAGNOSIS: {enc.get('admitting_diagnosis', '?')}")
+        lines.append(f"LENGTH OF STAY: {enc.get('length_of_stay', '?')} days")
     lines.append("")
+
+    # NEWS2
+    news2 = patient_data.get("news2", {})
+    if news2:
+        lines.append(f"NEWS2 SCORE: {news2.get('total_score', '?')} ({news2.get('risk_level', '?')})")
+        breakdown = news2.get("breakdown", {})
+        for param, data in breakdown.items():
+            lines.append(f"  {param}: {data.get('value', '?')} (score {data.get('score', '?')})")
+        lines.append("")
 
     # Active conditions
     conditions = patient_data.get("active_conditions", [])
@@ -30,32 +45,13 @@ def _build_patient_context(patient_data: dict) -> str:
             lines.append(f"  - {c}")
         lines.append("")
 
-    # Flagged vitals
-    vitals = patient_data.get("flagged_vitals", [])
-    if vitals:
-        lines.append("FLAGGED VITALS:")
-        for v in vitals:
-            lines.append(f"  - {v.get('display', v.get('code', '?'))}: "
-                         f"{v.get('value', '?')} {v.get('unit', '')} "
-                         f"[{v.get('severity', '?')}] {v.get('message', '')}")
-        lines.append("")
-
-    # Vital trends
+    # Vital trends (24h)
     vtrends = patient_data.get("vital_trends", [])
     if vtrends:
-        lines.append("VITAL TRENDS:")
+        lines.append("VITAL TRENDS (24h):")
         for t in vtrends:
-            lines.append(f"  - {t['display']}: {t['from']} -> {t['to']} ({t['direction']})")
-        lines.append("")
-
-    # Flagged labs
-    labs = patient_data.get("flagged_labs", [])
-    if labs:
-        lines.append("FLAGGED LABS:")
-        for l in labs:
-            lines.append(f"  - {l.get('display', l.get('code', '?'))}: "
-                         f"{l.get('value', '?')} {l.get('unit', '')} "
-                         f"[{l.get('severity', '?')}] {l.get('message', '')}")
+            flag = " [CONCERNING]" if t.get("concerning") else ""
+            lines.append(f"  - {t['parameter']}: {t['oldest']} -> {t['newest']} ({t['direction']}){flag}")
         lines.append("")
 
     # Lab trends
@@ -63,46 +59,56 @@ def _build_patient_context(patient_data: dict) -> str:
     if ltrends:
         lines.append("LAB TRENDS:")
         for t in ltrends:
-            lines.append(f"  - {t['display']}: {t['from']} -> {t['to']} ({t['direction']})")
+            lines.append(f"  - {t['parameter']}: {t['oldest']} -> {t['newest']} ({t['direction']})")
         lines.append("")
 
-    # Drug interactions
-    interactions = patient_data.get("drug_interactions", [])
-    if interactions:
-        lines.append("DRUG INTERACTIONS DETECTED:")
-        for ix in interactions:
-            lines.append(f"  - {ix['drug_a']} + {ix['drug_b']}: {ix['description']}")
+    # Flagged vitals/labs
+    fv = patient_data.get("flagged_vitals", [])
+    if fv:
+        lines.append("FLAGGED VITALS:")
+        for v in fv:
+            lines.append(f"  - {v.get('message', str(v))}")
         lines.append("")
 
-    # Polypharmacy
-    poly = patient_data.get("polypharmacy")
-    if poly:
-        lines.append(f"POLYPHARMACY: {poly['description']}")
+    fl = patient_data.get("flagged_labs", [])
+    if fl:
+        lines.append("FLAGGED LABS:")
+        for l in fl:
+            lines.append(f"  - {l.get('message', str(l))}")
         lines.append("")
 
-    # Allergy conflicts
-    conflicts = patient_data.get("allergy_conflicts", [])
+    # Conflicts
+    conflicts = patient_data.get("conflicts", [])
     if conflicts:
-        lines.append("ALLERGY CONFLICTS:")
+        lines.append("DETECTED CONFLICTS:")
         for c in conflicts:
-            lines.append(f"  - Medication: {c['medication']} conflicts with "
-                         f"allergy to {c['allergy']} (reaction: {c.get('reaction', '?')})")
+            lines.append(f"  - [{c.get('severity', '?')}] {c.get('message', str(c))}")
         lines.append("")
 
     # Clinical notes
-    notes = patient_data.get("notes_summary", "")
+    notes = patient_data.get("clinical_notes", [])
     if notes:
-        lines.append(f"CLINICAL NOTES SUMMARY:\n{notes}")
+        lines.append("CLINICAL NOTES:")
+        for n in notes:
+            lines.append(f"  [{n.get('type', 'Note')}] {n.get('date', '')[:16]}")
+            lines.append(f"  {n.get('text', '')[:300]}")
+            lines.append("")
+
+    # Discharge status
+    discharge = patient_data.get("discharge", {})
+    if discharge:
+        lines.append(f"DISCHARGE STATUS: {discharge.get('status', '?')}")
+        lines.append(f"  {discharge.get('summary', '')}")
+        for b in discharge.get("blockers", []):
+            lines.append(f"  BLOCKER: {b}")
         lines.append("")
 
-    # Priority from rule engine
-    priority = patient_data.get("priority", "UNKNOWN")
-    reasons = patient_data.get("reasons", [])
-    lines.append(f"RULE-BASED PRIORITY: {priority}")
-    if reasons:
-        lines.append("REASONS:")
-        for r in reasons:
-            lines.append(f"  - {r}")
+    # Safety flags
+    sf = patient_data.get("safety_flags", [])
+    if sf:
+        lines.append("SAFETY FLAGS:")
+        for f in sf:
+            lines.append(f"  - {f}")
 
     return "\n".join(lines)
 
@@ -128,7 +134,6 @@ async def _call_llm(user_message: str) -> str:
         resp.raise_for_status()
         data = resp.json()
 
-    # Standard OpenAI-compatible response
     if "choices" in data:
         return data["choices"][0]["message"]["content"] or ""
 
@@ -149,7 +154,6 @@ def _parse_json_response(raw: str) -> dict:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # Try to find JSON object in the text
         start = raw.find("{")
         end = raw.rfind("}") + 1
         if start >= 0 and end > start:
@@ -160,26 +164,27 @@ def _parse_json_response(raw: str) -> dict:
     return {}
 
 
-BRIEFING_PROMPT = """\
-You are a clinical decision-support assistant for an outpatient clinic triage system.
-You are NOT a doctor. You do NOT diagnose. You assist doctors by summarizing data.
+WARD_BRIEFING_PROMPT = """\
+You are a clinical decision-support assistant for an inpatient hospital ward round system.
+You are NOT a doctor. You do NOT diagnose. You assist consultants by summarizing overnight changes.
 
-Below is compiled FHIR data for a patient who has an appointment today.
-Generate a structured clinical briefing in valid JSON format.
+Below is compiled FHIR data for an inpatient on a general medicine ward.
+Generate a structured ward round briefing in valid JSON format.
 
 Rules:
 - Only reference data actually provided below. Never invent medications, conditions, or values.
 - If data is incomplete or missing, say so explicitly.
-- Write in professional but readable clinical language.
-- Keep everything concise. Doctors are busy.
+- Write in professional clinical language using proper medical terminology.
+- Keep everything concise. Consultants are doing a ward round with limited time per patient.
+- Focus on what has CHANGED since the last review.
 
 Respond ONLY with valid JSON matching this exact schema:
 {
-  "pre_visit_summary": "A short paragraph covering who the patient is, age, main conditions, why they are coming in, any concerning trends, current medications, and what has changed since last visit.",
-  "priority_reasoning": "A plain-language explanation of why this patient is at their current priority level. Reference specific data points.",
-  "briefing_points": ["Point 1", "Point 2", "Point 3", "Point 4"],
-  "suggested_questions": ["Question 1", "Question 2", "Question 3"],
-  "data_completeness": "complete or incomplete with explanation"
+  "overnight_summary": "A concise paragraph (max 150 words) covering what changed overnight. Use SOAP-adjacent format. Focus on trends, events, and any deterioration or improvement.",
+  "conflict_highlights": "Plain language explanation of any detected conflicts. If no conflicts, say 'No conflicts detected.'",
+  "ward_round_talking_points": ["Point 1", "Point 2", "Point 3", "Point 4"],
+  "suggested_plan_adjustments": "If data suggests the current plan needs review, state what and why. If plan appears appropriate, confirm briefly.",
+  "data_completeness": "complete or brief note on what is missing"
 }
 
 PATIENT DATA:
@@ -187,9 +192,9 @@ PATIENT DATA:
 
 
 async def generate_patient_briefing(patient_data: dict) -> dict:
-    """Generate LLM-powered clinical briefing for a single patient."""
-    context = _build_patient_context(patient_data)
-    prompt = BRIEFING_PROMPT + context
+    """Generate LLM-powered ward round briefing for a single patient."""
+    context = _build_ward_context(patient_data)
+    prompt = WARD_BRIEFING_PROMPT + context
 
     try:
         raw = await _call_llm(prompt)
@@ -198,9 +203,8 @@ async def generate_patient_briefing(patient_data: dict) -> dict:
         if not result:
             return _fallback_briefing(patient_data, "LLM returned unparseable response")
 
-        # Validate required fields
-        required = ["pre_visit_summary", "priority_reasoning",
-                     "briefing_points", "suggested_questions"]
+        required = ["overnight_summary", "conflict_highlights",
+                     "ward_round_talking_points", "suggested_plan_adjustments"]
         for field in required:
             if field not in result:
                 result[field] = "Not available"
@@ -214,26 +218,31 @@ async def generate_patient_briefing(patient_data: dict) -> dict:
 def _fallback_briefing(patient_data: dict, error: str) -> dict:
     """Generate a minimal briefing when LLM is unavailable."""
     name = patient_data.get("name", "Unknown")
-    priority = patient_data.get("priority", "UNKNOWN")
-    reasons = patient_data.get("reasons", [])
-    reason_text = "; ".join(reasons) if reasons else "No specific flags."
+    news2 = patient_data.get("news2", {})
+    conflicts = patient_data.get("conflicts", [])
+    conditions = patient_data.get("active_conditions", [])
+
+    conflict_text = "; ".join(c.get("message", "") for c in conflicts) if conflicts else "None detected"
+    condition_text = ", ".join(conditions[:3]) if conditions else "Not available"
 
     return {
-        "pre_visit_summary": f"{name} is scheduled for: "
-                             f"{patient_data.get('reason_for_visit', 'routine visit')}. "
-                             f"Rule-based priority: {priority}.",
-        "priority_reasoning": reason_text,
-        "briefing_points": reasons[:4] if reasons else ["Review patient chart"],
-        "suggested_questions": [
-            "How have you been feeling since your last visit?",
-            "Have you noticed any new or worsening symptoms?",
-            "Are you taking all your medications as prescribed?",
+        "overnight_summary": (
+            f"{name} - NEWS2: {news2.get('total_score', '?')} ({news2.get('risk_level', '?')}). "
+            f"Conditions: {condition_text}. "
+            f"LLM unavailable - review chart directly."
+        ),
+        "conflict_highlights": conflict_text,
+        "ward_round_talking_points": [
+            "Review overnight observations",
+            "Check medication chart",
+            "Assess discharge readiness",
         ],
+        "suggested_plan_adjustments": "Unable to generate - LLM unavailable. Review data manually.",
         "data_completeness": f"LLM unavailable ({error}). Showing rule-based data only.",
     }
 
 
-# Legacy function for backward compatibility
+# Legacy function for backward compatibility with risk_engine
 async def analyse_notes(notes_text: str) -> dict:
     """Send clinical notes for structured risk assessment."""
     if not notes_text.strip():

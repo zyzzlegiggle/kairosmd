@@ -140,3 +140,56 @@ class FHIRClient:
             "patient": patient_id,
             "_count": "50",
         })
+
+    # -- Encounters (inpatient) -----------------------------------------
+    async def get_encounters(self, patient_id: str = "", status: str = "in-progress") -> list[dict]:
+        """Fetch inpatient Encounters. If no patient_id, fetch all active."""
+        params = {"class": "IMP", "status": status, "_count": "50"}
+        if patient_id:
+            params["patient"] = patient_id
+        return await self._search("Encounter", params)
+
+    async def get_encounter_for_patient(self, patient_id: str) -> dict | None:
+        """Get the current active inpatient encounter for a patient."""
+        encs = await self.get_encounters(patient_id)
+        return encs[0] if encs else None
+
+    # -- MedicationAdministration ---------------------------------------
+    async def get_med_admins(self, patient_id: str, count: int = 50) -> list[dict]:
+        """Fetch MedicationAdministration records."""
+        return await self._search("MedicationAdministration", {
+            "patient": patient_id,
+            "_sort": "-effective-time",
+            "_count": str(count),
+        })
+
+    # -- Procedures -----------------------------------------------------
+    async def get_procedures(self, patient_id: str) -> list[dict]:
+        return await self._search("Procedure", {
+            "patient": patient_id,
+            "_count": "20",
+        })
+
+    # -- DiagnosticReport -----------------------------------------------
+    async def get_diagnostic_reports(self, patient_id: str) -> list[dict]:
+        return await self._search("DiagnosticReport", {
+            "patient": patient_id,
+            "_sort": "-date",
+            "_count": "20",
+        })
+
+    # -- CareTeam -------------------------------------------------------
+    async def get_care_team(self, patient_id: str) -> list[dict]:
+        return await self._search("CareTeam", {
+            "patient": patient_id,
+            "status": "active",
+            "_count": "5",
+        })
+
+    # -- Flags ----------------------------------------------------------
+    async def get_flags(self, patient_id: str) -> list[dict]:
+        return await self._search("Flag", {
+            "patient": patient_id,
+            "status": "active",
+            "_count": "10",
+        })
