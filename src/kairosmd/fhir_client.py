@@ -201,3 +201,43 @@ class FHIRClient:
         # Client-side filter for active status
         return [f for f in results if f.get("status") == "active"] or results
 
+    async def _post(self, resource: str, data: dict) -> dict:
+        """Create a new resource on the FHIR server."""
+        client = await self._get_client()
+        resp = await client.post(f"/{resource}", json=data)
+        if resp.status_code not in (200, 201):
+            print(f"  [FHIR] Error creating {resource}: {resp.status_code} - {resp.text[:200]}")
+            resp.raise_for_status()
+        return resp.json()
+
+    # -- Persistence Methods --------------------------------------------
+
+    async def create_clinical_note(self, patient_id: str, text: str, author: str = "Dr Reynolds") -> dict:
+        """Create a DocumentReference for a clinical decision note."""
+        import base64
+        from datetime import datetime, timezone
+        encoded = base64.b64encode(text.encode("utf-8")).decode("utf-8")
+        
+        doc = {
+            "resourceType": "DocumentReference",
+            "status": "current",
+            "type": {"text": "Clinical Decision Note"},
+            "subject": {"reference": f"Patient/{patient_id}"},
+            "date": datetime.now(timezone.utc).isoformat(),
+            "author": [{"display": author}],
+            "description": "Ward Round Decision Support Note",
+            "content": [{"attachment": {"contentType": "text/plain", "data": encoded}}]
+        }
+        return await self._post("DocumentReference", doc)
+
+    async def create_safety_flag(self, patient_id: str, code: str, detail: str) -> dict:
+        """Create a Flag resource for clinical escalation/safety."""
+        flag = {
+            "resourceType": "Flag",
+            "status": "active",
+            "category": [{"text": "Clinical Safety"}],
+            "code": {"text": f"{code}: {detail}"},
+            "subject": {"reference": f"Patient/{patient_id}"}
+        }
+        return await self._post("Flag", flag)
+

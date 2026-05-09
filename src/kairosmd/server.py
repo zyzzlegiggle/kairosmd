@@ -1,11 +1,12 @@
-"""KairosMD MCP Server - Ward Round Decision Support.
+"""KairosMD MCP Server - Multidisciplinary Ward Round Decision Support (MDS).
 
-Exposes 5 MCP tools:
+Exposes 6 MCP tools:
   1. get_ward_round_summary  - Full ward overview sorted by priority
   2. get_patient_ward_detail - Deep dive into single patient
   3. get_discharge_candidates - Patients ready or near-ready for discharge
   4. get_conflict_report     - All detected conflicts across the ward
-  5. record_ward_action      - Record clinical actions (acknowledge, escalate, etc.)
+  5. record_ward_action      - Record MDT clinical actions (acknowledge, escalate, etc.)
+  6. get_action_history      - Chronological MDT activity log
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from kairosmd.ward_actions import (
     get_escalation_status, get_discharge_override,
 )
 
-mcp = FastMCP("KairosMD")
+mcp = FastMCP("KairosMD MDS")
 fhir = FHIRClient()
 
 # Priority sort order for ward round
@@ -50,6 +51,12 @@ def _get_cached(pid: str) -> dict | None:
 def _set_cached(pid: str, data: dict):
     """Store patient data in cache."""
     _patient_cache[pid] = (time.time(), data)
+
+
+def _invalidate_cache(pid: str):
+    """Remove patient from cache to force re-fetch."""
+    if pid in _patient_cache:
+        del _patient_cache[pid]
 
 
 def _attach_actions(pid: str, data: dict) -> dict:
@@ -155,6 +162,32 @@ async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
         }
 
 
+# -- Cache Warmer ------------------------------------------------------
+async def warm_cache():
+    """Pre-fetch all patient data on startup so the first request is instant."""
+    print("\n--- [CACHE] Starting background cache warm-up... ---")
+    try:
+        patient_ids = await _get_ward_patient_ids(fhir)
+        print(f"--- [CACHE] Warming data for {len(patient_ids)} patients... ---")
+        
+        for i, pid in enumerate(patient_ids):
+            if _get_cached(pid):
+                continue
+            
+            print(f"  [CACHE] {i+1}/{len(patient_ids)}: Processing {pid}...")
+            await _process_patient(pid, fhir)
+            
+            # Small delay to prevent 429 during warming
+            if i < len(patient_ids) - 1:
+                await asyncio.sleep(1.0)
+                
+        print("--- [CACHE] Warm-up complete. All patients ready. ---\n")
+    except Exception as e:
+        print(f"--- [CACHE] Warm-up failed: {e} ---")
+
+
+
+
 # -- Helper: get all ward patient IDs ---------------------------------
 async def _get_ward_patient_ids(fhir: FHIRClient) -> list[str]:
     """Get all patient IDs from active inpatient encounters."""
@@ -196,7 +229,7 @@ async def get_ward_round_summary() -> str:
 
     Sorted by clinical priority (high risk first, discharge ready last).
     """
-    patient_ids = (await _get_ward_patient_ids(fhir))[:2]
+    patient_ids = await _get_ward_patient_ids(fhir)
 
     if not patient_ids:
         return json.dumps({
@@ -269,7 +302,7 @@ async def get_discharge_candidates() -> str:
     Returns patients flagged as 'Ready' or 'Requires Review',
     sorted by length of stay (longest first).
     """
-    patient_ids = (await _get_ward_patient_ids(fhir))[:2]
+    patient_ids = await _get_ward_patient_ids(fhir)
 
     candidates = []
     for i, pid in enumerate(patient_ids):
@@ -308,7 +341,7 @@ async def get_conflict_report() -> str:
     Includes allergy-medication conflicts, drug interactions,
     missed doses, and note-vs-data contradictions.
     """
-    patient_ids = (await _get_ward_patient_ids(fhir))[:2]
+    patient_ids = await _get_ward_patient_ids(fhir)
 
     conflict_patients = []
     for i, pid in enumerate(patient_ids):
@@ -373,21 +406,81 @@ async def record_ward_action(
         conflict_id=conflict_id,
     )
 
+    # PERSISTENCE LAYER: Write back to FHIR for certain action types
+    try:
+        if action_type in ("clinical_note_added", "conflict_acknowledged"):
+            # Create a permanent DocumentReference in FHIR
+            note_text = detail if action_type == "clinical_note_added" else f"Acknowledged conflict: {detail}"
+            await fhir.create_clinical_note(patient_id, note_text)
+            print(f"  [FHIR] Persisted clinical note for {patient_id}")
+            
+        elif action_type in ("urgent_review_flagged", "escalation_requested"):
+            # Create a permanent Flag in FHIR
+            flag_code = "URGENT_REVIEW" if action_type == "urgent_review_flagged" else "ESCALATION"
+            await fhir.create_safety_flag(patient_id, flag_code, detail)
+            print(f"  [FHIR] Persisted safety flag for {patient_id}")
+            
+        elif action_type in ("discharge_approved", "discharge_blocked"):
+            # Create a note regarding discharge decision
+            await fhir.create_clinical_note(patient_id, f"DISCHARGE DECISION: {action_type.replace('_', ' ')}. {detail}")
+            print(f"  [FHIR] Persisted discharge decision note for {patient_id}")
+    except Exception as e:
+        print(f"  [FHIR] Warning: Failed to persist to FHIR: {e}")
+
+    # Invalidate cache so new FHIR resources (notes/flags) show up immediately
+    _invalidate_cache(patient_id)
+
     result = json.dumps({
         "status": "recorded",
         "action": action,
-        "message": f"Action '{action_type}' recorded for patient {patient_id}",
+        "message": f"Action '{action_type}' recorded and persisted to FHIR for patient {patient_id}",
     }, indent=2)
 
     print(f"\n--- [LOG] Action recorded: {action_type} for {patient_id} ---")
     return result
 
 
+# =====================================================================
+# TOOL 6: get_action_history
+# =====================================================================
+@mcp.tool()
+async def get_action_history(patient_id: str) -> str:
+    """Get the chronological audit trail of actions taken for a patient.
+
+    Returns a list of all clinical notes, acknowledgements, escalations,
+    and status changes recorded by staff.
+    """
+    actions = get_actions(patient_id)
+    # Sort by timestamp ascending (oldest first for timeline)
+    actions.sort(key=lambda x: x.get("timestamp", ""))
+
+    result = json.dumps({
+        "patient_id": patient_id,
+        "action_count": len(actions),
+        "history": actions,
+        "dashboard_url": f"/dashboard/patient/{patient_id}#timeline",
+    }, indent=2)
+
+    print(f"\n--- [LOG] History requested for {patient_id}: {len(actions)} entries ---")
+    return result
+
+
 # -- Entry point -------------------------------------------------------
 def main():
     import sys
+    import threading
+    import time
+
+    def background_warmer():
+        # Wait for the server to be fully up
+        time.sleep(2)
+        asyncio.run(warm_cache())
+
+    # Start warming in a background thread so it doesn't block mcp.run()
+    threading.Thread(target=background_warmer, daemon=True).start()
+
     if "--sse" in sys.argv:
-        print("Starting KairosMD in SSE mode (default port 8000)")
+        print("Starting KairosMD MDS in SSE mode (default port 8000)")
         mcp.run(transport="sse")
     else:
         mcp.run()

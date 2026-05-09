@@ -262,22 +262,51 @@ export default function PatientDetailPage({ params }) {
         <p className="text-sm text-gray-700">{briefing.suggested_plan_adjustments || "Not available"}</p>
       </Section>
 
-      {/* Action Audit Log */}
-      {data.actions?.length > 0 && (
-        <Section title="Action Log">
-          <div className="space-y-2">
-            {data.actions.map((a, i) => (
-              <div key={i} className="text-sm border-l-2 border-blue-300 pl-3">
-                <p className="text-xs text-gray-400">{a.timestamp?.slice(0, 16)} — {a.clinician}</p>
-                <p className="text-gray-700">
-                  <span className="font-medium">{a.action_type.replace(/_/g, " ")}</span>
-                  {a.detail && `: ${a.detail}`}
-                </p>
-              </div>
-            ))}
+      {/* Clinical Activity Timeline */}
+      <Section title="Clinical Activity Timeline">
+        {data.actions?.length > 0 ? (
+          <div className="relative border-l-2 border-gray-200 ml-3 space-y-6 pb-4">
+            {[...data.actions].reverse().map((a, i) => {
+              const isEscalation = a.action_type.includes("urgent") || a.action_type.includes("escalation");
+              const isDischarge = a.action_type.includes("discharge");
+              const isNote = a.action_type === "clinical_note_added";
+              
+              return (
+                <div key={i} className="relative pl-6">
+                  {/* Timeline dot */}
+                  <div className={`absolute -left-[9px] top-1 w-4 h-4 rounded-full border-2 border-white shadow-sm ${
+                    isEscalation ? "bg-red-500" : isDischarge ? "bg-blue-500" : isNote ? "bg-amber-500" : "bg-gray-400"
+                  }`} />
+                  
+                  <div className="bg-white border border-gray-100 rounded-md p-3 shadow-sm">
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-xs font-bold text-gray-900 uppercase">
+                        {a.action_type.replace(/_/g, " ")}
+                      </span>
+                      <span className="text-[10px] font-medium text-gray-400 tabular-nums">
+                        {new Date(a.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-700 leading-relaxed">
+                      {a.detail || "No additional detail provided."}
+                    </p>
+                    <div className="mt-2 pt-2 border-t border-gray-50 flex items-center gap-1.5">
+                      <div className="w-4 h-4 rounded-full bg-blue-100 flex items-center justify-center text-[8px] font-bold text-blue-600">
+                        {a.clinician?.charAt(0)}
+                      </div>
+                      <span className="text-[10px] font-medium text-gray-500">
+                        {a.clinician} &middot; Consultant
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </Section>
-      )}
+        ) : (
+          <p className="text-sm text-gray-400 italic">No activity recorded for this session.</p>
+        )}
+      </Section>
 
       {/* Clinical Notes */}
       {data.clinical_notes?.length > 0 && (
