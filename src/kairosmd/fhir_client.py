@@ -5,8 +5,12 @@ DocumentReference (clinical notes), and Condition resources.
 """
 
 import httpx
+import asyncio
 from datetime import date
 from kairosmd import config
+
+MAX_RETRIES = 3
+RETRY_DELAY = 2.0  # seconds, doubles on each retry
 
 
 class FHIRClient:
@@ -32,12 +36,24 @@ class FHIRClient:
 
     # -- helpers --------------------------------------------------------
     async def _search(self, resource: str, params: dict) -> list[dict]:
-        """Execute a FHIR search and return the list of resources."""
+        """Execute a FHIR search with retry on 429."""
         client = await self._get_client()
-        resp = await client.get(f"/{resource}", params=params)
-        resp.raise_for_status()
-        bundle = resp.json()
-        return [e["resource"] for e in bundle.get("entry", [])]
+        delay = RETRY_DELAY
+        for attempt in range(MAX_RETRIES + 1):
+            resp = await client.get(f"/{resource}", params=params)
+            if resp.status_code == 429:
+                if attempt < MAX_RETRIES:
+                    print(f"  [FHIR] 429 on {resource}, retrying in {delay}s...")
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                    continue
+                else:
+                    print(f"  [FHIR] 429 on {resource}, max retries reached")
+                    return []
+            resp.raise_for_status()
+            bundle = resp.json()
+            return [e["resource"] for e in bundle.get("entry", [])]
+        return []
 
     async def _read(self, resource: str, resource_id: str) -> dict:
         client = await self._get_client()
@@ -105,5 +121,22 @@ class FHIRClient:
         return await self._search("Condition", {
             "patient": patient_id,
             "clinical-status": "active",
+            "_count": "50",
+        })
+
+    # -- Medications ----------------------------------------------------
+    async def get_medications(self, patient_id: str) -> list[dict]:
+        """Fetch active MedicationRequest resources."""
+        return await self._search("MedicationRequest", {
+            "patient": patient_id,
+            "status": "active",
+            "_count": "50",
+        })
+
+    # -- Allergies ------------------------------------------------------
+    async def get_allergies(self, patient_id: str) -> list[dict]:
+        """Fetch AllergyIntolerance resources."""
+        return await self._search("AllergyIntolerance", {
+            "patient": patient_id,
             "_count": "50",
         })

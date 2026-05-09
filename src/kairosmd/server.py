@@ -9,6 +9,7 @@ Run in prod     :  uv run mcp run src/kairosmd/server.py
 
 from __future__ import annotations
 import json
+import asyncio
 from datetime import date
 
 from mcp.server.fastmcp import FastMCP
@@ -306,6 +307,159 @@ async def generate_priority_list(
         "schedule": schedule,
         "priority_list": priority,
     }, indent=2)
+from kairosmd.triage_engine import score_patient_v2
+from kairosmd.llm_agent import generate_patient_briefing
+
+PRIORITY_ORDER = {"URGENT": 0, "ATTENTION": 1, "STABLE": 2, "ROUTINE": 3}
+
+# =====================================================================
+#  TOOL 7 - get_triage_dashboard
+# =====================================================================
+@mcp.tool()
+async def get_triage_dashboard(
+    practitioner_id: str | None = None,
+    target_date: str | None = None,
+) -> str:
+    """Full triage dashboard for a doctor's scheduled patients.
+
+    Returns two sections:
+    1. Appointment list sorted by time
+    2. Triage priority list ranked by clinical urgency
+
+    Priority levels:
+    - URGENT: Critical values, allergy conflicts, concerning symptoms
+    - ATTENTION: Worsening trends, drug interactions, polypharmacy
+    - STABLE: Mild abnormalities, no critical flags
+    - ROUTINE: All normal, standard follow-up
+
+    Each patient includes flagged vitals/labs, drug interactions,
+    allergy conflicts, trends, and notes summary.
+
+    Args:
+        practitioner_id: FHIR Practitioner resource ID.
+        target_date: ISO date (YYYY-MM-DD). Defaults to today.
+    """
+    prac_id = practitioner_id or config.DEFAULT_PRACTITIONER_ID
+    if not prac_id:
+        return json.dumps({"error": "practitioner_id is required"})
+
+    appts = await fhir.get_appointments(prac_id, target_date)
+    if not appts:
+        return json.dumps({
+            "practitioner_id": prac_id,
+            "date": target_date or date.today().isoformat(),
+            "patient_count": 0,
+            "appointment_list": [],
+            "triage_list": [],
+        })
+
+    appt_summaries = [_appointment_summary(a) for a in appts]
+    patient_ids = list({s["patient_id"] for s in appt_summaries if s["patient_id"]})
+
+    patients_raw = await fhir.get_patients_batch(patient_ids)
+    patients_map = {p["id"]: _patient_summary(p) for p in patients_raw}
+
+    # Build appointment list (Section 1)
+    appointment_list = []
+    for s in sorted(appt_summaries, key=lambda x: x.get("start", "")):
+        pid = s["patient_id"]
+        pt = patients_map.get(pid, {})
+        appointment_list.append({
+            "patient_id": pid,
+            "name": pt.get("name", "Unknown"),
+            "birthDate": pt.get("birthDate", ""),
+            "gender": pt.get("gender", ""),
+            "appointment_time": s.get("start", ""),
+            "reason": s.get("description", ""),
+        })
+
+    # Limit concurrency to 3 patients at a time to avoid 429s
+    sem = asyncio.Semaphore(3)
+
+    # Helper to process a single patient
+    async def process_patient(pid):
+        async with sem:
+            try:
+                # 1. Fetch all FHIR data for this patient in parallel
+                v_task = fhir.get_vitals(pid)
+                l_task = fhir.get_labs(pid)
+                n_task = fhir.get_clinical_notes(pid)
+                c_task = fhir.get_conditions(pid)
+                m_task = fhir.get_medications(pid)
+                a_task = fhir.get_allergies(pid)
+                
+                vitals, labs, notes, conditions, medications, allergies = await asyncio.gather(
+                    v_task, l_task, n_task, c_task, m_task, a_task
+                )
+
+                # 2. Run rule-based scoring
+                result = await score_patient_v2(
+                    vitals, labs, notes, conditions, medications, allergies
+                )
+                
+                # 3. Get LLM briefing
+                pt = patients_map.get(pid, {})
+                appt_time = ""
+                appt_reason = ""
+                for a in appt_summaries:
+                    if a["patient_id"] == pid:
+                        appt_time = a.get("start", "")
+                        appt_reason = a.get("description", "")
+                        break
+
+                patient_context = {
+                    "name": pt.get("name", "Unknown"),
+                    "birthDate": pt.get("birthDate", ""),
+                    "gender": pt.get("gender", ""),
+                    "reason_for_visit": appt_reason,
+                    **result,
+                }
+                
+                briefing = await generate_patient_briefing(patient_context)
+                
+                return {
+                    "patient_id": pid,
+                    "name": pt.get("name", "Unknown"),
+                    "birthDate": pt.get("birthDate", ""),
+                    "appointment_time": appt_time,
+                    "reason_for_visit": appt_reason,
+                    **result,
+                    "llm_briefing": briefing,
+                }
+            except Exception as e:
+                print(f"Error processing patient {pid}: {e}")
+                return {
+                    "patient_id": pid,
+                    "name": patients_map.get(pid, {}).get("name", "Unknown"),
+                    "priority": "ATTENTION",
+                    "reasons": [f"Processing error: {e}"],
+                    "llm_briefing": {"data_completeness": "incomplete"}
+                }
+
+    # Process patients sequentially to avoid rate limits on public FHIR
+    triage_list = []
+    for i, pid in enumerate(patient_ids):
+        print(f"  Processing patient {i+1}/{len(patient_ids)} ({pid})...")
+        entry = await process_patient(pid)
+        triage_list.append(entry)
+        # Small delay between patients to avoid 429s
+        if i < len(patient_ids) - 1:
+            await asyncio.sleep(0.5)
+
+    # Sort by priority
+    triage_list.sort(key=lambda x: PRIORITY_ORDER.get(x.get("priority", "ROUTINE"), 3))
+
+    result = json.dumps({
+        "practitioner_id": prac_id,
+        "date": target_date or date.today().isoformat(),
+        "patient_count": len(patient_ids),
+        "appointment_list": appointment_list,
+        "triage_list": triage_list,
+    }, indent=2)
+
+    # Log summary instead of full JSON to keep terminal clean but still useful
+    print(f"\n--- [LOG] Triage Dashboard Generated: {len(patient_ids)} patients processed in parallel ---")
+    return result
 
 
 # -- Entry point -------------------------------------------------------
