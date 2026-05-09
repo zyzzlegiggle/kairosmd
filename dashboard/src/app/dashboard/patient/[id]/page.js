@@ -66,6 +66,7 @@ export default function PatientDetailPage({ params }) {
         action_type: actionType,
         detail: detail,
         conflict_id: conflictId,
+        clinician: "Dr. Mike",
       });
       setActionFeedback(`Action recorded: ${actionType.replace(/_/g, " ")}`);
       clearMCPCache();

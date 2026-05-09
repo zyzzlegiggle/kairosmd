@@ -1,311 +1,140 @@
-"""Seed inpatient ward data into HAPI FHIR R4 server."""
+"""MDS Scenario-Based Seeder.
+Generates 15 high-fidelity clinical scenarios for Ward 4.
+"""
 
 import asyncio
-import base64
 import random
 from datetime import datetime, timedelta, timezone
-
 from kairosmd.fhir_client import FHIRClient
-from kairosmd.seed_data import PROFILES
+from kairosmd.seed_data import SCENARIOS, CONSULTANTS, NURSES, NOW
 
-NOW = datetime.now(timezone.utc)
+fhir = FHIRClient()
 
-# LOINC display names for vital signs
-VITAL_DISPLAY = {
-    "8480-6": "Systolic BP", "8462-4": "Diastolic BP",
-    "8867-4": "Heart Rate", "9279-1": "Respiratory Rate",
-    "2708-6": "SpO2", "8310-5": "Body Temperature",
-    "9269-2": "Glasgow Coma Scale",
-}
+async def purge_ward():
+    """Skip purge on public HAPI FHIR server — shared data cannot be deleted.
+    Our system filters by active IMP encounters so old data won't appear."""
+    print("--- [PURGE] Skipping purge (public server). Seeding fresh data. ---")
 
-# LOINC display names for common labs
-LAB_DISPLAY = {
-    "6690-2": "WBC", "718-7": "Hemoglobin", "777-3": "Platelets",
-    "2951-2": "Sodium", "2823-3": "Potassium", "2160-0": "Creatinine",
-    "3094-0": "BUN", "2345-7": "Glucose", "1988-5": "CRP",
-    "33959-8": "Procalcitonin", "1742-6": "ALT", "1920-8": "AST",
-    "30934-4": "BNP", "2069-3": "Troponin I",
-    "48065-7": "D-Dimer", "2744-1": "pH", "20591-1": "Ketones",
-    "2019-8": "pCO2", "2703-7": "pO2",
-}
-
-
-async def _post(http, resource_type, body):
-    """POST a FHIR resource, handling duplicates gracefully."""
-    resp = await http.post(f"/{resource_type}", json=body)
-    if resp.status_code in (200, 201):
-        rid = resp.json().get("id")
-        if not rid:
-            loc = resp.headers.get("Location", "")
-            if f"/{resource_type}/" in loc:
-                rid = loc.split(f"/{resource_type}/")[1].split("/")[0]
-        return rid
-    if "duplicating existing resource" in resp.text:
-        try:
-            rid = resp.text.split(f"{resource_type}/")[1].split("<")[0].strip()
-            return rid
-        except Exception:
-            pass
-    print(f"    WARN: Failed {resource_type}: {resp.status_code}")
-    return None
-
-
-async def seed():
-    client = FHIRClient()
-    http = await client._get_client()
-
-    print(f"Seeding {len(PROFILES)} inpatient patients...")
-
-    # 1. Practitioner (consultant)
-    prac = {
-        "resourceType": "Practitioner", "active": True,
-        "name": [{"family": "Reynolds", "given": ["Sarah"], "prefix": ["Dr"]}],
+def get_vitals_for_trend(trend: str, hour: int):
+    """Generate realistic NEWS2 vitals based on a clinical trend."""
+    # Base values for a healthy-ish adult
+    rr, spo2, sbp, hr, temp = 16, 97, 125, 75, 36.8
+    
+    if trend == "deteriorating":
+        # RR rises, SpO2 falls, SBP falls, HR rises
+        rr += (hour // 4) * 2
+        spo2 -= (hour // 4) * 2
+        sbp -= (hour // 4) * 5
+        hr += (hour // 4) * 5
+        temp = 38.5 if hour > 12 else 37.2
+    elif trend == "improving":
+        # Vitals normalize
+        rr = max(16, 24 - (hour // 4) * 2)
+        spo2 = min(98, 88 + (hour // 4) * 2)
+        hr = max(72, 110 - (hour // 4) * 5)
+    
+    return {
+        "9279-1": rr,    # RR
+        "59408-5": spo2, # SpO2
+        "8480-6": sbp,   # SBP
+        "8867-4": hr,    # HR
+        "8310-5": temp,  # Temp
+        "67775-7": 1.0   # AVPU (Alert)
     }
-    prac_id = await _post(http, "Practitioner", prac)
-    if not prac_id:
-        print("FATAL: Could not create Practitioner.")
-        return
-    print(f"Practitioner: {prac_id}")
 
-    for i, p in enumerate(PROFILES):
-        given, family = p["name"]
-        label = f"{given} {family}"
-        print(f"  [{i+1}/{len(PROFILES)}] {label}...")
+async def seed_patient_scenario(s: dict):
+    """Seed a full clinical story for one patient."""
+    p_info = s["patient"]
+    bed = s["bed"]
+    print(f"--- [SEED] Bed {bed}: {p_info['name']} ({p_info['condition']}) ---")
 
-        # 2. Patient
-        pt = {
-            "resourceType": "Patient", "active": True,
-            "name": [{"family": family, "given": [given]}],
-            "gender": p["gender"], "birthDate": p["dob"],
-        }
-        pid = await _post(http, "Patient", pt)
-        if not pid:
-            continue
+    # 1. Patient
+    patient = await fhir.create_patient(
+        name=p_info["name"],
+        gender=p_info["gender"],
+        birthDate=p_info["dob"]
+    )
+    pid = patient["id"]
 
-        # 3. Encounter (inpatient)
-        admit = NOW - timedelta(days=p["admission_days_ago"])
-        enc = {
-            "resourceType": "Encounter", "status": "in-progress",
-            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
-                      "code": "IMP", "display": "inpatient encounter"},
-            "subject": {"reference": f"Patient/{pid}"},
-            "participant": [{"individual": {"reference": f"Practitioner/{prac_id}",
-                                            "display": "Dr Sarah Reynolds"}}],
-            "period": {"start": admit.isoformat()},
-            "reasonCode": [{"text": p["encounter_reason"]}],
-            "location": [{"location": {"display": f"{p['ward']} - {p['bed']}"},
-                          "status": "active"}],
-        }
-        enc_id = await _post(http, "Encounter", enc)
+    # 2. Encounter
+    start_time = (NOW - timedelta(days=p_info["day"])).isoformat()
+    encounter = await fhir.create_encounter(
+        patient_id=pid,
+        status="in-progress",
+        start_time=start_time,
+        ward="General Medicine Ward",
+        bed=bed,
+        reason=p_info["condition"]
+    )
+    eid = encounter["id"]
 
-        # 4. Conditions
-        for icd, display in p["conditions"]:
-            cond = {
-                "resourceType": "Condition",
-                "clinicalStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
-                                               "code": "active"}]},
-                "code": {"coding": [{"system": "http://hl7.org/fhir/sid/icd-10-cm",
-                                     "code": icd, "display": display}], "text": display},
-                "subject": {"reference": f"Patient/{pid}"},
-            }
-            if enc_id:
-                cond["encounter"] = {"reference": f"Encounter/{enc_id}"}
-            await _post(http, "Condition", cond)
+    # 3. CareTeam
+    members = [
+        {"name": p_info["consultant"]["name"], "role": "Responsible Consultant"},
+        {"name": "Dr. Sarah (Registrar)", "role": "Senior Resident"},
+        {"name": "Dr. Amir (HO)", "role": "Junior Doctor"},
+        {"name": random.choice(NURSES), "role": "Primary Nurse"}
+    ]
+    await fhir.create_care_team(pid, members)
 
-        # 5. Allergies
-        for substance, reaction in p.get("allergies", []):
-            allergy = {
-                "resourceType": "AllergyIntolerance",
-                "clinicalStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical",
-                                               "code": "active"}]},
-                "code": {"text": substance},
-                "patient": {"reference": f"Patient/{pid}"},
-                "reaction": [{"manifestation": [{"text": reaction}]}],
-            }
-            await _post(http, "AllergyIntolerance", allergy)
+    # 4. Flags
+    for f in s.get("flags", []):
+        await fhir.create_safety_flag(pid, f["code"], f["detail"])
 
-        # 6. Medications
-        med_ids = {}
-        for med_name, rxnorm, dose, freq, route, status in p.get("medications", []):
-            med_req = {
-                "resourceType": "MedicationRequest", "status": status,
-                "intent": "order",
-                "medicationCodeableConcept": {
-                    "coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm",
-                                "code": str(rxnorm), "display": med_name}],
-                    "text": med_name},
-                "subject": {"reference": f"Patient/{pid}"},
-                "dosageInstruction": [{"text": f"{dose} {freq}",
-                                       "route": {"text": route}}],
-            }
-            if enc_id:
-                med_req["encounter"] = {"reference": f"Encounter/{enc_id}"}
-            mid = await _post(http, "MedicationRequest", med_req)
-            if mid:
-                med_ids[med_name] = mid
+    # 5. Allergies
+    for a in s.get("allergies", []):
+        await fhir.create_allergy(pid, a["code"], a["name"])
 
-        # 7. MedicationAdministration
-        for med_name, hours_ago, status in p.get("med_admin", []):
-            admin_time = (NOW - timedelta(hours=hours_ago)).isoformat()
-            admin = {
-                "resourceType": "MedicationAdministration",
-                "status": "completed" if status == "given" else ("not-done" if status == "missed" else "on-hold"),
-                "medicationCodeableConcept": {"text": med_name},
-                "subject": {"reference": f"Patient/{pid}"},
-                "effectiveDateTime": admin_time,
-            }
-            if status != "given":
-                admin["statusReason"] = [{"text": f"Dose {status}"}]
-            await _post(http, "MedicationAdministration", admin)
+    # 6. Vitals (6 time points in last 24h)
+    for h in [0, 4, 8, 12, 16, 20]:
+        v_time = (NOW - timedelta(hours=24-h)).isoformat()
+        vitals = get_vitals_for_trend(s.get("vitals_trend", "stable"), h)
+        for code, val in vitals.items():
+            await fhir.create_observation(pid, code, val, v_time, eid)
 
-        # 8. Vitals
-        for hours_ago, sbp, dbp, hr, rr, spo2, temp, gcs in p["vitals"]:
-            eff = (NOW - timedelta(hours=hours_ago, minutes=random.randint(0, 30))).isoformat()
-            vitals_data = [
-                ("8480-6", sbp, "mmHg"), ("8462-4", dbp, "mmHg"),
-                ("8867-4", hr, "bpm"), ("9279-1", rr, "breaths/min"),
-                ("2708-6", spo2, "%"), ("8310-5", temp, "Cel"),
-                ("9269-2", gcs, "{score}"),
-            ]
-            for loinc, val, unit in vitals_data:
-                obs = {
-                    "resourceType": "Observation", "status": "final",
-                    "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category",
-                                              "code": "vital-signs"}]}],
-                    "code": {"coding": [{"system": "http://loinc.org", "code": loinc,
-                                         "display": VITAL_DISPLAY.get(loinc, loinc)}]},
-                    "subject": {"reference": f"Patient/{pid}"},
-                    "effectiveDateTime": eff,
-                    "valueQuantity": {"value": val, "unit": unit,
-                                      "system": "http://unitsofmeasure.org", "code": unit},
-                }
-                if enc_id:
-                    obs["encounter"] = {"reference": f"Encounter/{enc_id}"}
-                await _post(http, "Observation", obs)
+    # 7. Labs
+    for i, lab in enumerate(s.get("labs", [])):
+        # Admission lab
+        await fhir.create_observation(pid, lab["code"], lab["value"] * 0.9, start_time, eid)
+        # Recent lab
+        await fhir.create_observation(pid, lab["code"], lab["value"], (NOW - timedelta(hours=2)).isoformat(), eid)
 
-        # 9. Labs
-        for hours_ago, lab_dict in p["labs"]:
-            eff = (NOW - timedelta(hours=hours_ago, minutes=random.randint(0, 30))).isoformat()
-            for loinc, (val, unit) in lab_dict.items():
-                obs = {
-                    "resourceType": "Observation", "status": "final",
-                    "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category",
-                                              "code": "laboratory"}]}],
-                    "code": {"coding": [{"system": "http://loinc.org", "code": loinc,
-                                         "display": LAB_DISPLAY.get(loinc, loinc)}]},
-                    "subject": {"reference": f"Patient/{pid}"},
-                    "effectiveDateTime": eff,
-                    "valueQuantity": {"value": val, "unit": unit,
-                                      "system": "http://unitsofmeasure.org", "code": unit},
-                }
-                if enc_id:
-                    obs["encounter"] = {"reference": f"Encounter/{enc_id}"}
-                await _post(http, "Observation", obs)
+    # 8. Notes
+    notes = s.get("notes", {})
+    if "clerking" in notes:
+        await fhir.create_clinical_note(pid, notes["clerking"], "Dr. Amir (HO)")
+    if "consultant" in notes:
+        await fhir.create_clinical_note(pid, notes["consultant"], p_info["consultant"]["name"])
+    if "junior" in notes:
+        await fhir.create_clinical_note(pid, notes["junior"], "Dr. Amir (HO)")
+    if "specialist" in notes:
+        await fhir.create_clinical_note(pid, notes["specialist"], "Specialist Consult")
+    
+    # Nursing notes (Shift based)
+    if "nursing_night" in notes:
+        await fhir.create_clinical_note(pid, f"NIGHT SHIFT: {notes['nursing_night']}", random.choice(NURSES))
+    if "nursing_morning" in notes:
+        await fhir.create_clinical_note(pid, f"MORNING SHIFT: {notes['nursing_morning']}", random.choice(NURSES))
+    if "nursing_afternoon" in notes:
+        await fhir.create_clinical_note(pid, f"AFTERNOON SHIFT: {notes['nursing_afternoon']}", random.choice(NURSES))
 
-        # 10. Notes (DocumentReference)
-        notes = p.get("notes", {})
-        # Admission note
-        if notes.get("admission"):
-            doc = {
-                "resourceType": "DocumentReference", "status": "current",
-                "type": {"text": "Admission Clerking Note"},
-                "subject": {"reference": f"Patient/{pid}"},
-                "date": admit.isoformat(),
-                "description": "Admission Clerking Note",
-                "content": [{"attachment": {
-                    "contentType": "text/plain",
-                    "data": base64.b64encode(notes["admission"].encode()).decode(),
-                }}],
-            }
-            await _post(http, "DocumentReference", doc)
+    # 9. Meds
+    for m in s.get("meds", []):
+        await fhir.create_medication_request(pid, m, p_info["consultant"]["name"])
+        # Administration (one completed dose)
+        await fhir.create_medication_administration(pid, m["name"], "completed", (NOW - timedelta(hours=4)).isoformat(), random.choice(NURSES))
 
-        # Nursing notes
-        for hours_ago, text in notes.get("nursing", []):
-            doc = {
-                "resourceType": "DocumentReference", "status": "current",
-                "type": {"text": "Nursing Shift Note"},
-                "subject": {"reference": f"Patient/{pid}"},
-                "date": (NOW - timedelta(hours=hours_ago)).isoformat(),
-                "description": "Nursing Shift Note",
-                "content": [{"attachment": {
-                    "contentType": "text/plain",
-                    "data": base64.b64encode(text.encode()).decode(),
-                }}],
-            }
-            await _post(http, "DocumentReference", doc)
+    # 10. Audit History (Communications)
+    if s["bed"] in ["1", "3", "7", "15"]:
+        await fhir.create_communication(pid, p_info["consultant"]["name"], "Ward Team", "Critical result reviewed. Plan updated.", (NOW - timedelta(hours=6)).isoformat())
 
-        # Progress note
-        if notes.get("progress"):
-            doc = {
-                "resourceType": "DocumentReference", "status": "current",
-                "type": {"text": "Medical Progress Note"},
-                "subject": {"reference": f"Patient/{pid}"},
-                "date": (NOW - timedelta(hours=6)).isoformat(),
-                "description": "Medical Progress Note",
-                "content": [{"attachment": {
-                    "contentType": "text/plain",
-                    "data": base64.b64encode(notes["progress"].encode()).decode(),
-                }}],
-            }
-            await _post(http, "DocumentReference", doc)
-
-        # 11. Procedures
-        for proc_name, proc_date in p.get("procedures", []):
-            proc = {
-                "resourceType": "Procedure", "status": "completed",
-                "code": {"text": proc_name},
-                "subject": {"reference": f"Patient/{pid}"},
-                "performedDateTime": proc_date,
-            }
-            if enc_id:
-                proc["encounter"] = {"reference": f"Encounter/{enc_id}"}
-            await _post(http, "Procedure", proc)
-
-        # 12. DiagnosticReport
-        for report_name, report_date, report_text in p.get("diagnostics", []):
-            dr = {
-                "resourceType": "DiagnosticReport", "status": "final",
-                "code": {"text": report_name},
-                "subject": {"reference": f"Patient/{pid}"},
-                "effectiveDateTime": report_date,
-                "conclusion": report_text,
-            }
-            if enc_id:
-                dr["encounter"] = {"reference": f"Encounter/{enc_id}"}
-            await _post(http, "DiagnosticReport", dr)
-
-        # 13. CareTeam
-        members = p.get("care_team", [])
-        if members:
-            ct = {
-                "resourceType": "CareTeam", "status": "active",
-                "subject": {"reference": f"Patient/{pid}"},
-                "participant": [
-                    {"role": [{"text": role}],
-                     "member": {"display": f"{name} ({dept})"}}
-                    for name, role, dept in members
-                ],
-            }
-            if enc_id:
-                ct["encounter"] = {"reference": f"Encounter/{enc_id}"}
-            await _post(http, "CareTeam", ct)
-
-        # 14. Flags
-        for flag_code, flag_status, flag_text in p.get("flags", []):
-            flag = {
-                "resourceType": "Flag", "status": "active",
-                "category": [{"text": flag_code}],
-                "code": {"text": f"{flag_code}: {flag_status} - {flag_text}"},
-                "subject": {"reference": f"Patient/{pid}"},
-            }
-            await _post(http, "Flag", flag)
-
-        print(f"    Done: {label}")
-        await asyncio.sleep(0.3)  # rate limit gap
-
-    await client.close()
-    print(f"\nDone. Set DEFAULT_PRACTITIONER_ID={prac_id} in .env")
-
+async def main():
+    await purge_ward()
+    for s in SCENARIOS:
+        await seed_patient_scenario(s)
+        # Small sleep to be kind to the public server
+        await asyncio.sleep(0.5)
+    print("\n--- [SEED] MDS Ward 4 Seeding Complete! ---")
 
 if __name__ == "__main__":
-    asyncio.run(seed())
+    asyncio.run(main())

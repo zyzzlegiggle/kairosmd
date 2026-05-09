@@ -28,6 +28,9 @@ from kairosmd.ward_actions import (
 mcp = FastMCP("KairosMD MDS")
 fhir = FHIRClient()
 
+# Default practitioner ID (Dr. Mike)
+DEFAULT_PRACTITIONER_ID = "dr-mike"
+
 # Priority sort order for ward round
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
@@ -190,15 +193,22 @@ async def warm_cache():
 
 # -- Helper: get all ward patient IDs ---------------------------------
 async def _get_ward_patient_ids(fhir: FHIRClient) -> list[str]:
-    """Get all patient IDs from active inpatient encounters."""
+    """Get all patient IDs from active inpatient encounters in Ward 4."""
     encounters = await fhir.get_encounters()
     patient_ids = []
+    
+    # FILTER: Only include patients in our specific Ward
     for enc in encounters:
-        ref = enc.get("subject", {}).get("reference", "")
-        if ref.startswith("Patient/"):
-            pid = ref.split("/")[1]
-            if pid not in patient_ids:
-                patient_ids.append(pid)
+        locs = enc.get("location", [])
+        is_our_ward = any("General Medicine Ward" in l.get("location", {}).get("display", "") for l in locs)
+        
+        if is_our_ward:
+            ref = enc.get("subject", {}).get("reference", "")
+            if ref.startswith("Patient/"):
+                pid = ref.split("/")[1]
+                if pid not in patient_ids:
+                    patient_ids.append(pid)
+    
     return patient_ids
 
 

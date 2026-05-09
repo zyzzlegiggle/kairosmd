@@ -6,6 +6,7 @@ DocumentReference (clinical notes), and Condition resources.
 
 import httpx
 import asyncio
+import random
 from datetime import date
 from kairosmd import config
 
@@ -35,7 +36,7 @@ class FHIRClient:
             await self._client.aclose()
 
     # -- helpers --------------------------------------------------------
-    async def _search(self, resource: str, params: dict) -> list[dict]:
+    async def search(self, resource: str, params: dict) -> list[dict]:
         """Execute a FHIR search with retry on 429."""
         client = await self._get_client()
         delay = RETRY_DELAY
@@ -70,7 +71,7 @@ class FHIRClient:
         self, practitioner_id: str, target_date: str | None = None
     ) -> list[dict]:
         """Fetch appointments for a practitioner on a given date."""
-        return await self._search("Appointment", {
+        return await self.search("Appointment", {
             "practitioner": practitioner_id,
             "date": target_date or date.today().isoformat(),
             "_count": "50",
@@ -93,7 +94,7 @@ class FHIRClient:
     # -- Vitals ---------------------------------------------------------
     async def get_vitals(self, patient_id: str, count: int = 20) -> list[dict]:
         """Fetch vital-sign Observations sorted newest-first."""
-        return await self._search("Observation", {
+        return await self.search("Observation", {
             "patient": patient_id,
             "category": "vital-signs",
             "_sort": "-date",
@@ -103,7 +104,7 @@ class FHIRClient:
     # -- Labs -----------------------------------------------------------
     async def get_labs(self, patient_id: str, count: int = 30) -> list[dict]:
         """Fetch laboratory Observations sorted newest-first."""
-        return await self._search("Observation", {
+        return await self.search("Observation", {
             "patient": patient_id,
             "category": "laboratory",
             "_sort": "-date",
@@ -113,7 +114,7 @@ class FHIRClient:
     # -- Clinical Notes -------------------------------------------------
     async def get_clinical_notes(self, patient_id: str, count: int = 10) -> list[dict]:
         """Fetch DocumentReference resources (nursing/doctor notes)."""
-        return await self._search("DocumentReference", {
+        return await self.search("DocumentReference", {
             "patient": patient_id,
             "_sort": "-date",
             "_count": str(count),
@@ -122,7 +123,7 @@ class FHIRClient:
     # -- Conditions -----------------------------------------------------
     async def get_conditions(self, patient_id: str) -> list[dict]:
         """Fetch active Condition resources for chronic-disease context."""
-        return await self._search("Condition", {
+        return await self.search("Condition", {
             "patient": patient_id,
             "clinical-status": "active",
             "_count": "50",
@@ -131,7 +132,7 @@ class FHIRClient:
     # -- Medications ----------------------------------------------------
     async def get_medications(self, patient_id: str) -> list[dict]:
         """Fetch active MedicationRequest resources."""
-        return await self._search("MedicationRequest", {
+        return await self.search("MedicationRequest", {
             "patient": patient_id,
             "status": "active",
             "_count": "50",
@@ -140,7 +141,7 @@ class FHIRClient:
     # -- Allergies ------------------------------------------------------
     async def get_allergies(self, patient_id: str) -> list[dict]:
         """Fetch AllergyIntolerance resources."""
-        return await self._search("AllergyIntolerance", {
+        return await self.search("AllergyIntolerance", {
             "patient": patient_id,
             "_count": "50",
         })
@@ -151,7 +152,7 @@ class FHIRClient:
         params = {"status": status, "_count": "50"}
         if patient_id:
             params["patient"] = patient_id
-        results = await self._search("Encounter", params)
+        results = await self.search("Encounter", params)
         # Client-side filter for IMP class since HAPI may not support class search
         return [e for e in results
                 if e.get("class", {}).get("code") == "IMP"]
@@ -164,28 +165,28 @@ class FHIRClient:
     # -- MedicationAdministration ---------------------------------------
     async def get_med_admins(self, patient_id: str, count: int = 50) -> list[dict]:
         """Fetch MedicationAdministration records."""
-        return await self._search("MedicationAdministration", {
+        return await self.search("MedicationAdministration", {
             "patient": patient_id,
             "_count": str(count),
         })
 
     # -- Procedures -----------------------------------------------------
     async def get_procedures(self, patient_id: str) -> list[dict]:
-        return await self._search("Procedure", {
+        return await self.search("Procedure", {
             "patient": patient_id,
             "_count": "20",
         })
 
     # -- DiagnosticReport -----------------------------------------------
     async def get_diagnostic_reports(self, patient_id: str) -> list[dict]:
-        return await self._search("DiagnosticReport", {
+        return await self.search("DiagnosticReport", {
             "patient": patient_id,
             "_count": "20",
         })
 
     # -- CareTeam -------------------------------------------------------
     async def get_care_team(self, patient_id: str) -> list[dict]:
-        results = await self._search("CareTeam", {
+        results = await self.search("CareTeam", {
             "patient": patient_id,
             "_count": "5",
         })
@@ -194,7 +195,7 @@ class FHIRClient:
 
     # -- Flags ----------------------------------------------------------
     async def get_flags(self, patient_id: str) -> list[dict]:
-        results = await self._search("Flag", {
+        results = await self.search("Flag", {
             "patient": patient_id,
             "_count": "10",
         })
@@ -206,13 +207,64 @@ class FHIRClient:
         client = await self._get_client()
         resp = await client.post(f"/{resource}", json=data)
         if resp.status_code not in (200, 201):
-            print(f"  [FHIR] Error creating {resource}: {resp.status_code} - {resp.text[:200]}")
+            print(f"  [FHIR] Error creating {resource}: {resp.status_code} - {resp.text[:300]}")
             resp.raise_for_status()
         return resp.json()
 
+    async def create_patient(self, name: str, gender: str, birthDate: str) -> dict:
+        """Create a Patient resource."""
+        p = {
+            "resourceType": "Patient",
+            "name": [{"text": name}],
+            "gender": gender,
+            "birthDate": birthDate,
+        }
+        return await self._post("Patient", p)
+
+    async def create_encounter(self, patient_id: str, status: str, start_time: str, ward: str, bed: str, reason: str) -> dict:
+        """Create an inpatient Encounter resource."""
+        e = {
+            "resourceType": "Encounter",
+            "status": status,
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "IMP", "display": "inpatient"},
+            "subject": {"reference": f"Patient/{patient_id}"},
+            "period": {"start": start_time},
+            "reasonCode": [{"text": reason}],
+            "location": [{
+                "location": {"display": f"{ward} - Bed {bed}"},
+                "status": "active"
+            }]
+        }
+        return await self._post("Encounter", e)
+
+    async def create_observation(self, patient_id: str, code: str, value: float, timestamp: str, encounter_id: str = None) -> dict:
+        """Create an Observation (vitals or labs)."""
+        category = "vital-signs" if code in ["9279-1", "59408-5", "8480-6", "8867-4", "8310-5", "67775-7"] else "laboratory"
+        
+        obs = {
+            "resourceType": "Observation",
+            "status": "final",
+            "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": category}]}],
+            "code": {"coding": [{"system": "http://loinc.org", "code": code}]},
+            "subject": {"reference": f"Patient/{patient_id}"},
+            "effectiveDateTime": timestamp,
+            "valueQuantity": {"value": value}
+        }
+        if encounter_id:
+            obs["encounter"] = {"reference": f"Encounter/{encounter_id}"}
+        return await self._post("Observation", obs)
+
+    async def _delete(self, resource: str, resource_id: str):
+        """Delete a resource from the FHIR server."""
+        client = await self._get_client()
+        resp = await client.delete(f"/{resource}/{resource_id}")
+        if resp.status_code not in (200, 204, 410):
+            print(f"  [FHIR] Error deleting {resource}/{resource_id}: {resp.status_code}")
+        return resp.status_code
+
     # -- Persistence Methods --------------------------------------------
 
-    async def create_clinical_note(self, patient_id: str, text: str, author: str = "Dr Reynolds") -> dict:
+    async def create_clinical_note(self, patient_id: str, text: str, author: str = "Dr. Mike") -> dict:
         """Create a DocumentReference for a clinical decision note."""
         import base64
         from datetime import datetime, timezone
@@ -240,4 +292,83 @@ class FHIRClient:
             "subject": {"reference": f"Patient/{patient_id}"}
         }
         return await self._post("Flag", flag)
+
+    async def create_care_team(self, patient_id: str, members: list[dict]) -> dict:
+        """Create a CareTeam resource."""
+        ct = {
+            "resourceType": "CareTeam",
+            "status": "active",
+            "subject": {"reference": f"Patient/{patient_id}"},
+            "participant": [
+                {
+                    "role": [{"text": m["role"]}],
+                    "member": {"display": m["name"]}
+                } for m in members
+            ]
+        }
+        return await self._post("CareTeam", ct)
+
+    async def create_allergy(self, patient_id: str, code: str, display: str, criticality: str = "high") -> dict:
+        """Create an AllergyIntolerance resource."""
+        allergy = {
+            "resourceType": "AllergyIntolerance",
+            "clinicalStatus": {"coding": [{"system": "http://terminology.hl7.org/CodeSystem/allergyintolerance-clinical", "code": "active"}]},
+            "criticality": criticality,
+            "code": {"coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": code}], "text": display},
+            "patient": {"reference": f"Patient/{patient_id}"}
+        }
+        return await self._post("AllergyIntolerance", allergy)
+
+    async def create_medication_request(self, patient_id: str, medication: dict, requester: str) -> dict:
+        """Create a MedicationRequest resource."""
+        mr = {
+            "resourceType": "MedicationRequest",
+            "status": medication.get("status", "active"),
+            "intent": "order",
+            "medicationCodeableConcept": {
+                "coding": [{"system": "http://www.nlm.nih.gov/research/umls/rxnorm", "code": medication["code"]}],
+                "text": medication["name"]
+            },
+            "subject": {"reference": f"Patient/{patient_id}"},
+            "requester": {"display": requester},
+            "dosageInstruction": [{"text": medication["dosage"]}]
+        }
+        return await self._post("MedicationRequest", mr)
+
+    async def create_medication_administration(self, patient_id: str, medication_name: str, status: str, time: str, performer: str) -> dict:
+        """Create a MedicationAdministration resource."""
+        ma = {
+            "resourceType": "MedicationAdministration",
+            "status": status,
+            "medicationCodeableConcept": {"text": medication_name},
+            "subject": {"reference": f"Patient/{patient_id}"},
+            "effectiveDateTime": time,
+            "performer": [{"actor": {"display": performer}}]
+        }
+        return await self._post("MedicationAdministration", ma)
+
+    async def create_diagnostic_report(self, patient_id: str, type_code: str, type_text: str, conclusion: str, date: str) -> dict:
+        """Create a DiagnosticReport resource."""
+        dr = {
+            "resourceType": "DiagnosticReport",
+            "status": "final",
+            "code": {"coding": [{"system": "http://loinc.org", "code": type_code}], "text": type_text},
+            "subject": {"reference": f"Patient/{patient_id}"},
+            "effectiveDateTime": date,
+            "conclusion": conclusion
+        }
+        return await self._post("DiagnosticReport", dr)
+
+    async def create_communication(self, patient_id: str, sender: str, recipient: str, payload: str, timestamp: str) -> dict:
+        """Create a Communication resource (Audit Log)."""
+        comm = {
+            "resourceType": "Communication",
+            "status": "completed",
+            "subject": {"reference": f"Patient/{patient_id}"},
+            "sent": timestamp,
+            "sender": {"display": sender},
+            "recipient": [{"display": recipient}],
+            "payload": [{"contentString": payload}]
+        }
+        return await self._post("Communication", comm)
 
