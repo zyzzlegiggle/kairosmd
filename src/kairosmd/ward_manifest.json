@@ -103,5 +103,40 @@
     "bed": "15",
     "name": "Samuel Jackson",
     "condition": "CKD Exacerbation"
+  },
+  {
+    "patient_id": "132040598",
+    "encounter_id": "132040599",
+    "bed": "16",
+    "name": "Fatimah Zahra",
+    "condition": "DVT Left Leg"
+  },
+  {
+    "patient_id": "132040641",
+    "encounter_id": "132040642",
+    "bed": "17",
+    "name": "Liam O'Brien",
+    "condition": "Acute Severe Asthma"
+  },
+  {
+    "patient_id": "132040688",
+    "encounter_id": "132040689",
+    "bed": "18",
+    "name": "George Tan",
+    "condition": "Variceal Bleed"
+  },
+  {
+    "patient_id": "132040755",
+    "encounter_id": "132040756",
+    "bed": "19",
+    "name": "Dorothy Chen",
+    "condition": "Hip Fracture (Post-Op)"
+  },
+  {
+    "patient_id": "69c2792581e99ae3d62b9614",
+    "encounter_id": "132040803",
+    "bed": "20",
+    "name": "Ryan Mitchell",
+    "condition": "Alcohol Withdrawal"
   }
 ]

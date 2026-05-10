@@ -286,13 +286,16 @@ async def _enrich_with_fda_data(medications: list[dict], conflicts: list[dict]) 
     fda_data = {"drug_warnings": [], "interaction_evidence": []}
 
     try:
-        # Get FDA warnings for each active medication
+        # Get FDA warnings for each unique active medication
+        seen_meds = set()
         med_names = []
         for med in medications:
             name = med.get("medicationCodeableConcept", {}).get("text", "")
             if name:
-                base = name.split()[0]  # "Amoxicillin 500mg" → "Amoxicillin"
-                med_names.append(base)
+                base = name.split()[0].replace(",", "").replace(";", "") # Clean up common separators
+                if base not in seen_meds:
+                    med_names.append(base)
+                    seen_meds.add(base)
 
         # Fetch labels (with rate limiting)
         for name in med_names[:6]:  # Cap at 6 to avoid API overload

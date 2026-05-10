@@ -46,6 +46,63 @@ function PriorityDot({ level }) {
   return <span className={`inline-block w-2 h-2 rounded-full ${colors[level] || colors.LOW}`} />;
 }
 
+/* ── Sparkline (SVG) ──────────────────────────────────────────── */
+function Sparkline({ trends, width = 80, height = 24 }) {
+  // Extract HR values from vital_trends for a quick trajectory line
+  if (!trends || trends.length === 0) return <span className="text-[9px] text-text-tertiary">--</span>;
+
+  // Use the first trend that has multiple data points (usually HR or RR)
+  const hrTrend = trends.find(t => t.parameter === "Heart Rate" || t.loinc === "8867-4");
+  const rrTrend = trends.find(t => t.parameter === "Resp Rate" || t.loinc === "9279-1");
+  const trend = hrTrend || rrTrend || trends[0];
+  
+  // Build a simple series from oldest → newest
+  const values = [
+    parseFloat(trend.oldest),
+    // Interpolate a mid-point for a smoother line
+    (parseFloat(trend.oldest) + parseFloat(trend.newest)) / 2,
+    parseFloat(trend.newest)
+  ].filter(v => !isNaN(v));
+
+  if (values.length < 2) return <span className="text-[9px] text-text-tertiary">--</span>;
+
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  const pad = 2;
+
+  const points = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (width - pad * 2);
+    const y = pad + (1 - (v - min) / range) * (height - pad * 2);
+    return `${x},${y}`;
+  }).join(" ");
+
+  // Color based on direction
+  const dir = trend.direction;
+  const color = dir === "increasing" ? "var(--clinical-critical, #dc2626)" 
+              : dir === "decreasing" ? "var(--clinical-info, #2563eb)" 
+              : "var(--clinical-normal, #16a34a)";
+
+  return (
+    <svg width={width} height={height} className="inline-block">
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* End dot */}
+      {values.length > 0 && (() => {
+        const lastX = pad + ((values.length - 1) / (values.length - 1)) * (width - pad * 2);
+        const lastY = pad + (1 - (values[values.length - 1] - min) / range) * (height - pad * 2);
+        return <circle cx={lastX} cy={lastY} r="2.5" fill={color} />;
+      })()}
+    </svg>
+  );
+}
+
 function LoadingSkeleton() {
   return (
     <div className="space-y-6">
@@ -117,6 +174,13 @@ export default function DashboardPage() {
     return <span className="ml-1 text-clinical-info">{sortConfig.direction === "asc" ? "\u2191" : "\u2193"}</span>;
   };
 
+  // Row acuity band colors
+  const rowBand = (priority) => {
+    if (priority === "HIGH") return "border-l-4 border-l-clinical-critical bg-clinical-critical-bg/20";
+    if (priority === "MEDIUM") return "border-l-4 border-l-clinical-warning bg-clinical-warning-bg/20";
+    return "";
+  };
+
   // Extract all conflicts for Ward Alerts
   const allConflicts = [];
   patients.forEach(p => {
@@ -148,7 +212,7 @@ export default function DashboardPage() {
             </span>
           </div>
           <div className="divide-y divide-clinical-critical-border/30">
-            {highPriorityAlerts.slice(0, 3).map((alert, i) => (
+            {highPriorityAlerts.slice(0, 5).map((alert, i) => (
               <div key={i} className="px-6 py-3 flex items-center justify-between text-sm">
                 <div className="flex items-center gap-3">
                   <span className="font-bold text-clinical-critical">HIGH</span>
@@ -157,13 +221,13 @@ export default function DashboardPage() {
                   </span>
                 </div>
                 <Link href={`/dashboard/patient/${alert.patientId}`} className="text-xs font-bold text-clinical-info hover:underline">
-                  Review Patient
+                  Review
                 </Link>
               </div>
             ))}
-            {highPriorityAlerts.length > 3 && (
+            {highPriorityAlerts.length > 5 && (
               <div className="px-6 py-2 text-center bg-surface-secondary">
-                <p className="text-[10px] text-text-tertiary uppercase font-bold">+{highPriorityAlerts.length - 3} more critical alerts</p>
+                <p className="text-[10px] text-text-tertiary uppercase font-bold">+{highPriorityAlerts.length - 5} more critical alerts</p>
               </div>
             )}
           </div>
@@ -198,12 +262,7 @@ export default function DashboardPage() {
                 Patient <SortIcon col="name" />
               </th>
               <th className="text-left px-3 py-3 text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">Diagnosis</th>
-              <th
-                className="text-center px-3 py-3 text-[11px] font-semibold text-text-tertiary uppercase tracking-wider cursor-pointer hover:text-text-primary"
-                onClick={() => requestSort("admitted")}
-              >
-                Admitted <SortIcon col="admitted" />
-              </th>
+              <th className="text-center px-3 py-3 text-[11px] font-semibold text-text-tertiary uppercase tracking-wider">Trend</th>
               <th
                 className="text-center px-3 py-3 text-[11px] font-semibold text-text-tertiary uppercase tracking-wider cursor-pointer hover:text-text-primary"
                 onClick={() => requestSort("los")}
@@ -227,7 +286,7 @@ export default function DashboardPage() {
           </thead>
           <tbody className="divide-y divide-border-light">
             {patients.map((p) => (
-              <tr key={p.patient_id} className="hover:bg-surface-hover transition-colors group">
+              <tr key={p.patient_id} className={`hover:bg-surface-hover transition-colors group ${rowBand(p.priority)}`}>
                 <td className="px-6 py-3.5">
                   <PriorityDot level={p.priority} />
                 </td>
@@ -243,8 +302,8 @@ export default function DashboardPage() {
                 <td className="px-3 py-3.5 text-text-secondary max-w-[180px] truncate">
                   {p.encounter?.admitting_diagnosis || "-"}
                 </td>
-                <td className="px-3 py-3.5 text-center text-text-secondary tabular-nums">
-                  {p.encounter?.admission_date?.split("T")[0] || "-"}
+                <td className="px-3 py-3.5 text-center">
+                  <Sparkline trends={p.vital_trends} />
                 </td>
                 <td className="px-3 py-3.5 text-center text-text-secondary tabular-nums">
                   {p.encounter?.length_of_stay || "-"}

@@ -1,5 +1,5 @@
 """MDS Scenario-Based Seeder.
-Generates 15 high-fidelity clinical scenarios for Ward 4.
+Generates 20 high-fidelity clinical scenarios for Ward 4.
 """
 
 import asyncio

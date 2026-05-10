@@ -180,7 +180,7 @@ async def warm_cache():
     """Pre-fetch all patient data on startup so the first request is instant."""
     print("\n--- [CACHE] Starting background cache warm-up... ---")
     try:
-        patient_ids = (await _get_ward_patient_ids(fhir))[:3]
+        patient_ids = (await _get_ward_patient_ids(fhir))[:20]
         print(f"--- [CACHE] Warming data for {len(patient_ids)} patients... ---")
         
         for i, pid in enumerate(patient_ids):
@@ -242,7 +242,7 @@ def _sort_ward_list(triage_list: list[dict]) -> list[dict]:
 # TOOL 1: get_ward_round_summary
 # =====================================================================
 @mcp.tool()
-async def get_ward_round_summary(limit: int = 3) -> str:
+async def get_ward_round_summary(limit: int = 20) -> str:
     """Get the morning ward round summary for inpatient patients.
 
     Args:
