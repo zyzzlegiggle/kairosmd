@@ -1,0 +1,107 @@
+[
+  {
+    "patient_id": "132024923",
+    "encounter_id": "132024924",
+    "bed": "1",
+    "name": "Ahmad Razali",
+    "condition": "Community Acquired Pneumonia"
+  },
+  {
+    "patient_id": "132024980",
+    "encounter_id": "132024981",
+    "bed": "2",
+    "name": "Siti Norzahrah",
+    "condition": "AKI on T2DM"
+  },
+  {
+    "patient_id": "132025034",
+    "encounter_id": "132025035",
+    "bed": "3",
+    "name": "Rajendran Pillai",
+    "condition": "Heart Failure"
+  },
+  {
+    "patient_id": "132025262",
+    "encounter_id": "132025263",
+    "bed": "4",
+    "name": "William Bennett",
+    "condition": "AECOPD"
+  },
+  {
+    "patient_id": "132025309",
+    "encounter_id": "132025310",
+    "bed": "5",
+    "name": "Mei Ling",
+    "condition": "Sepsis"
+  },
+  {
+    "patient_id": "132025360",
+    "encounter_id": "132025361",
+    "bed": "6",
+    "name": "David O'Connor",
+    "condition": "AF with RVR"
+  },
+  {
+    "patient_id": "132025407",
+    "encounter_id": "132025408",
+    "bed": "7",
+    "name": "Norhaslinda Hassan",
+    "condition": "DKA"
+  },
+  {
+    "patient_id": "132025457",
+    "encounter_id": "132025458",
+    "bed": "8",
+    "name": "Rajesh Gupta",
+    "condition": "Upper GI Bleed"
+  },
+  {
+    "patient_id": "132025506",
+    "encounter_id": "132025507",
+    "bed": "9",
+    "name": "Sarah Thompson",
+    "condition": "PE"
+  },
+  {
+    "patient_id": "131888451",
+    "encounter_id": "132038367",
+    "bed": "10",
+    "name": "John Miller",
+    "condition": "Hypertensive Crisis"
+  },
+  {
+    "patient_id": "132025598",
+    "encounter_id": "132025599",
+    "bed": "11",
+    "name": "Eleanor Rigby",
+    "condition": "Ischaemic Stroke"
+  },
+  {
+    "patient_id": "132025645",
+    "encounter_id": "132025646",
+    "bed": "12",
+    "name": "Chee Keong Lim",
+    "condition": "Cellulitis"
+  },
+  {
+    "patient_id": "132025690",
+    "encounter_id": "132025691",
+    "bed": "13",
+    "name": "Maria Hernandez",
+    "condition": "Pancreatitis"
+  },
+  {
+    "patient_id": "132025737",
+    "encounter_id": "132025738",
+    "bed": "14",
+    "name": "Kevin Peterson",
+    "condition": "CAP (Improving)"
+  },
+  {
+    "patient_id": "132025782",
+    "encounter_id": "132025783",
+    "bed": "15",
+    "name": "Samuel Jackson",
+    "condition": "CKD Exacerbation"
+  }
+]

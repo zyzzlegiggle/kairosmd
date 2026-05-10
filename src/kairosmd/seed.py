@@ -68,9 +68,12 @@ async def seed_patient_scenario(s: dict):
     )
     eid = encounter["id"]
 
+    # Track IDs for manifest (returned at end of function)
+
     # 3. CareTeam
     members = [
         {"name": p_info["consultant"]["name"], "role": "Responsible Consultant"},
+        {"name": "Dr. Mike", "role": "Lead Consultant (MDS)"},
         {"name": "Dr. Sarah (Registrar)", "role": "Senior Resident"},
         {"name": "Dr. Amir (HO)", "role": "Junior Doctor"},
         {"name": random.choice(NURSES), "role": "Primary Nurse"}
@@ -95,9 +98,9 @@ async def seed_patient_scenario(s: dict):
     # 7. Labs
     for i, lab in enumerate(s.get("labs", [])):
         # Admission lab
-        await fhir.create_observation(pid, lab["code"], lab["value"] * 0.9, start_time, eid)
+        await fhir.create_observation(pid, lab["code"], lab["value"] * 0.9, start_time, eid, display=lab["name"])
         # Recent lab
-        await fhir.create_observation(pid, lab["code"], lab["value"], (NOW - timedelta(hours=2)).isoformat(), eid)
+        await fhir.create_observation(pid, lab["code"], lab["value"], (NOW - timedelta(hours=2)).isoformat(), eid, display=lab["name"])
 
     # 8. Notes
     notes = s.get("notes", {})
@@ -128,13 +131,25 @@ async def seed_patient_scenario(s: dict):
     if s["bed"] in ["1", "3", "7", "15"]:
         await fhir.create_communication(pid, p_info["consultant"]["name"], "Ward Team", "Critical result reviewed. Plan updated.", (NOW - timedelta(hours=6)).isoformat())
 
+    return {"patient_id": pid, "encounter_id": eid, "bed": bed, "name": p_info["name"], "condition": p_info["condition"]}
+
 async def main():
+    import json
+    from pathlib import Path
+
     await purge_ward()
+    manifest = []
     for s in SCENARIOS:
-        await seed_patient_scenario(s)
-        # Small sleep to be kind to the public server
+        result = await seed_patient_scenario(s)
+        manifest.append(result)
         await asyncio.sleep(0.5)
-    print("\n--- [SEED] MDS Ward 4 Seeding Complete! ---")
+
+    # Save manifest so the server knows our patient IDs
+    manifest_path = Path(__file__).parent / "ward_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+    print(f"\n--- [SEED] MDS Ward 4 Seeding Complete! ---")
+    print(f"--- [SEED] Manifest saved: {manifest_path} ---")
+    print(f"--- [SEED] {len(manifest)} patients registered ---")
 
 if __name__ == "__main__":
     asyncio.run(main())

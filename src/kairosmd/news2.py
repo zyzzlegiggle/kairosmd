@@ -76,8 +76,10 @@ LOINC_MAP = {
     "8867-4": "hr",
     "9279-1": "rr",
     "2708-6": "spo2",
+    "59408-5": "spo2",   # Pulse oximetry (alias used by seed data)
     "8310-5": "temp",
     "9269-2": "gcs",
+    "67775-7": "gcs",    # AVPU consciousness (alias used by seed data)
 }
 
 

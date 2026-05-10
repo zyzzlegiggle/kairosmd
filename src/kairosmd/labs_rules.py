@@ -24,15 +24,24 @@ class LabRange:
 LAB_RANGES: dict[str, LabRange] = {
     "2823-3":  LabRange("Potassium",    "mEq/L",   3.5,   5.0,   2.5,   6.5),
     "2951-2":  LabRange("Sodium",       "mEq/L", 136.0, 145.0, 120.0, 160.0),
-    "2345-7":  LabRange("Glucose",      "mg/dL",  70.0, 100.0,  40.0, 500.0),
+    "2345-7":  LabRange("Glucose",      "mmol/L",  4.0,  7.8,   2.0,  30.0),
     "718-7":   LabRange("Hemoglobin",   "g/dL",   12.0,  17.5,   7.0,  20.0),
-    "2160-0":  LabRange("Creatinine",   "mg/dL",   0.7,   1.3,  None,   5.0),
-    "6690-2":  LabRange("WBC",          "K/uL",    4.5,  11.0,   2.0,  40.0),
+    "2160-0":  LabRange("Creatinine",   "umol/L",  60.0, 110.0, None, 300.0),
+    "6690-2":  LabRange("WBC",          "10*9/L",  4.0,  11.0,   2.0,  30.0),
+    "6299-1":  LabRange("WBC",          "10*9/L",  4.0,  11.0,   2.0,  30.0),  # alias
     "777-3":   LabRange("Platelets",    "K/uL",  150.0, 400.0,  50.0, 1000.0),
     "1742-6":  LabRange("ALT",          "U/L",    7.0,   56.0,  None, 1000.0),
     "1920-8":  LabRange("AST",          "U/L",   10.0,   40.0,  None, 1000.0),
     "3094-0":  LabRange("BUN",          "mg/dL",   7.0,   20.0,  None, 100.0),
     "2069-3":  LabRange("Troponin I",   "ng/mL",   0.0,   0.04, None,   0.4),
+    # Seed-specific codes
+    "1988-5":  LabRange("CRP",          "mg/L",    0.0,   5.0,  None, 200.0),
+    "2019-8":  LabRange("Lactate",      "mmol/L",  0.5,   2.0,  None,   4.0),
+    "30522-7": LabRange("BNP",          "pg/mL",   0.0, 100.0,  None, 1000.0),
+    "33914-3": LabRange("eGFR",         "mL/min", 60.0, 120.0,  15.0, None),
+    "6301-5":  LabRange("INR",          "",        0.8,   1.2,  None,   5.0),
+    "1960-4":  LabRange("Bicarbonate",  "mmol/L", 22.0,  28.0,  10.0, None),
+    "1798-2":  LabRange("Amylase",      "U/L",    30.0, 110.0,  None, 500.0),
 }
 
 

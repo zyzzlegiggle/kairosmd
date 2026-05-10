@@ -1,325 +1,503 @@
 "use client";
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
-import { callMCPTool, clearMCPCache } from "@/lib/mcp";
+import { callMCPTool, invalidatePatientCache } from "@/lib/mcp";
+import dynamic from "next/dynamic";
 
-function Badge({ children, color }) {
-  const colors = {
-    red: "bg-red-100 text-red-700",
-    amber: "bg-amber-100 text-amber-700",
-    green: "bg-green-100 text-green-700",
-    gray: "bg-gray-100 text-gray-600",
+const VitalChart = dynamic(() => import("@/components/VitalChart"), { ssr: false });
+
+/* ---------- Shared UI Components ---------- */
+
+function Card({ title, children, className = "", headerRight = null }) {
+  return (
+    <div className={`bg-white rounded-xl border border-border ${className}`}>
+      {title && (
+        <div className="px-5 py-3.5 border-b border-border flex items-center justify-between">
+          <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider">{title}</h3>
+          {headerRight}
+        </div>
+      )}
+      <div className="px-5 py-4">{children}</div>
+    </div>
+  );
+}
+
+function Badge({ children, variant = "default" }) {
+  const styles = {
+    critical: "bg-clinical-critical text-white",
+    warning: "bg-clinical-warning-bg text-clinical-warning border border-clinical-warning-border",
+    success: "bg-clinical-normal-bg text-clinical-normal border border-clinical-normal-border",
+    info: "bg-clinical-info-bg text-clinical-info border border-clinical-info-border",
+    default: "bg-surface-secondary text-text-secondary border border-border",
   };
   return (
-    <span className={`text-xs font-medium px-2 py-0.5 rounded ${colors[color] || colors.gray}`}>
+    <span className={`inline-block text-[11px] font-semibold px-2.5 py-1 rounded-md ${styles[variant]}`}>
       {children}
     </span>
   );
 }
 
-function Section({ title, children }) {
-  return (
-    <div className="border border-gray-200 rounded-lg p-4 mb-4">
-      <h3 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">{title}</h3>
-      {children}
-    </div>
-  );
-}
-
 function ActionButton({ label, onClick, variant = "default", disabled = false }) {
   const styles = {
-    default: "border border-gray-300 text-gray-700 hover:bg-gray-50",
-    danger: "border border-red-300 text-red-700 hover:bg-red-50",
-    success: "border border-green-300 text-green-700 hover:bg-green-50",
-    primary: "bg-blue-600 text-white hover:bg-blue-700 border border-blue-600",
+    default: "border-border text-text-secondary hover:bg-surface-hover",
+    danger: "border-clinical-critical-border text-clinical-critical hover:bg-clinical-critical-bg",
+    success: "border-clinical-normal-border text-clinical-normal hover:bg-clinical-normal-bg",
+    primary: "bg-clinical-info text-white hover:bg-blue-700 border-clinical-info",
   };
   return (
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`text-xs px-3 py-1.5 rounded font-medium transition-colors ${styles[variant]} ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+      className={`text-xs font-semibold px-3.5 py-2 rounded-lg border transition-colors cursor-pointer ${styles[variant]} ${disabled ? "opacity-40 cursor-not-allowed" : ""}`}
     >
       {label}
     </button>
   );
 }
 
+function Toast({ message, onClose }) {
+  useEffect(() => {
+    const t = setTimeout(onClose, 3000);
+    return () => clearTimeout(t);
+  }, [onClose]);
+  return (
+    <div className="fixed bottom-6 right-6 z-50 toast-enter bg-text-primary text-white text-sm font-medium px-5 py-3 rounded-xl shadow-lg flex items-center gap-3">
+      <span>{message}</span>
+      <button onClick={onClose} className="text-white/60 hover:text-white text-xs cursor-pointer">Dismiss</button>
+    </div>
+  );
+}
+
+function LoadingSkeleton() {
+  return (
+    <div className="space-y-5">
+      <div className="skeleton h-28 rounded-xl" />
+      <div className="grid grid-cols-3 gap-5">
+        <div className="skeleton h-64 rounded-xl col-span-2" />
+        <div className="skeleton h-64 rounded-xl" />
+      </div>
+    </div>
+  );
+}
+
+function DrugWarningItem({ warning }) {
+  const [expanded, setExpanded] = useState(false);
+  const w = warning;
+  
+  return (
+    <div className="text-sm border border-clinical-warning-border bg-clinical-warning-bg rounded-lg px-3 py-2.5 transition-all">
+      <p className="font-semibold text-clinical-warning">{w.drug}</p>
+      {w.boxed_warning && <p className="text-[11px] text-clinical-critical font-bold mt-1 uppercase tracking-tight">Boxed Warning</p>}
+      {w.interaction_warnings && (
+        <div className="mt-1">
+          <p className={`text-xs text-text-secondary leading-relaxed ${expanded ? "" : "line-clamp-2"}`}>
+            {w.interaction_warnings}
+          </p>
+          {w.interaction_warnings.length > 100 && (
+            <button 
+              onClick={() => setExpanded(!expanded)}
+              className="text-[10px] font-bold text-clinical-info mt-1 hover:underline cursor-pointer uppercase tracking-wider"
+            >
+              {expanded ? "Show Less" : "Read Full Warning"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Page ---------- */
+
 export default function PatientDetailPage({ params }) {
   const { id } = use(params);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [actionNote, setActionNote] = useState("");
-  const [showNoteInput, setShowNoteInput] = useState(false);
-  const [actionFeedback, setActionFeedback] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const [toast, setToast] = useState("");
+  const [noteInput, setNoteInput] = useState("");
+  const [showNoteForm, setShowNoteForm] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
 
-  useEffect(() => {
-    callMCPTool("get_patient_ward_detail", { patient_id: id })
-      .then(setData)
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [id]);
+  const fetchData = async (isInitial = false) => {
+    if (isInitial) setLoading(true);
+    else setRefreshing(true);
+    
+    try {
+      const result = await callMCPTool("get_patient_ward_detail", { patient_id: id });
+      setData(result);
+    } catch (e) {
+      setToast("Failed to refresh clinical data");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
 
-  async function handleAction(actionType, detail = "", conflictId = "") {
+  useEffect(() => { fetchData(true); }, [id]);
+
+  const handleAction = async (actionType, detail = "", conflictId = "") => {
+    setActionLoading(true);
     try {
       await callMCPTool("record_ward_action", {
         patient_id: id,
         action_type: actionType,
-        detail: detail,
+        detail,
         conflict_id: conflictId,
         clinician: "Dr. Mike",
       });
-      setActionFeedback(`Action recorded: ${actionType.replace(/_/g, " ")}`);
-      clearMCPCache();
-      // Refresh patient data
-      const fresh = await callMCPTool("get_patient_ward_detail", { patient_id: id });
-      setData(fresh);
-      setTimeout(() => setActionFeedback(""), 3000);
+      invalidatePatientCache(id);
+      setToast(`Action recorded: ${actionType.replace(/_/g, " ")}`);
+      fetchData(false);
     } catch (e) {
-      setActionFeedback("Failed to record action");
+      setToast(`Error: ${e.message}`);
+    } finally {
+      setActionLoading(false);
     }
-  }
+  };
 
-  if (loading) return <p className="text-gray-500 p-4">Loading patient data...</p>;
-  if (!data) return <p className="text-red-600 p-4">Patient not found.</p>;
+  if (loading) return <LoadingSkeleton />;
+  if (!data) return <p className="text-text-tertiary text-sm">Patient not found.</p>;
 
   const briefing = data.llm_briefing || {};
   const news2 = data.news2 || {};
-  const enc = data.encounter || {};
+  const encounter = data.encounter || {};
+  const discharge = data.discharge || {};
+
+  const news2Variant = news2.risk_level === "HIGH" ? "critical" : news2.risk_level === "MEDIUM" ? "warning" : "success";
 
   return (
-    <div className="max-w-4xl">
-      <Link href="/dashboard" className="text-sm text-blue-600 hover:underline mb-4 inline-block">&larr; Back to Ward</Link>
-
-      {/* Action Feedback */}
-      {actionFeedback && (
-        <div className="bg-green-50 border border-green-200 text-green-800 text-sm px-4 py-2 rounded mb-4">
-          {actionFeedback}
-        </div>
-      )}
+    <div>
+      {/* Back link */}
+      <Link href="/dashboard" className="text-xs text-text-tertiary hover:text-text-secondary transition-colors mb-4 inline-block">
+        Ward Board
+      </Link>
 
       {/* Header */}
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h2 className="text-xl font-semibold">{data.name}</h2>
-          <p className="text-sm text-gray-500">
-            {data.gender} &middot; DOB: {data.birthDate} &middot; {enc.ward} &middot; {enc.bed}
-          </p>
-          <p className="text-sm text-gray-500">
-            Admitted: {enc.admission_date?.slice(0, 10)} &middot; Day {enc.length_of_stay} &middot; {enc.admitting_diagnosis}
-          </p>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <Badge color={news2.risk_level === "HIGH" ? "red" : news2.risk_level === "MEDIUM" ? "amber" : "green"}>
-            NEWS2: {news2.total_score} — {news2.risk_level}
-          </Badge>
-          {data.escalation_status && (
-            <Badge color="red">
-              {data.escalation_status === "escalation_requested" ? "ESCALATION REQUESTED" : "URGENT REVIEW FLAGGED"}
-            </Badge>
-          )}
-        </div>
-      </div>
+      <div className="bg-white rounded-xl border border-border p-6 mb-6">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="flex items-center gap-3 mb-1">
+              <h2 className="text-xl font-bold text-text-primary">{data.name}</h2>
+              <Badge variant={news2Variant}>NEWS2: {news2.total_score ?? "--"} ({news2.risk_level || "--"})</Badge>
+            </div>
+            <div className="flex items-center gap-4 text-xs text-text-tertiary mt-2">
+              <span><strong className="text-text-secondary">Bed</strong> {encounter.bed || "--"}</span>
+              <span className="text-border">|</span>
+              <span><strong className="text-text-secondary">Diagnosis</strong> {encounter.admitting_diagnosis || "--"}</span>
+              <span className="text-border">|</span>
+              <span><strong className="text-text-secondary">Day</strong> {encounter.length_of_stay || "--"}</span>
+              <span className="text-border">|</span>
+              <span><strong className="text-text-secondary">DOB</strong> {data.birthDate || "--"}</span>
+              <span className="text-border">|</span>
+              <span><strong className="text-text-secondary">Sex</strong> {data.gender || "--"}</span>
+            </div>
+          </div>
 
-      {/* Quick Actions Bar */}
-      <div className="border border-gray-200 rounded-lg p-3 mb-4 flex flex-wrap gap-2 items-center">
-        <span className="text-xs text-gray-500 font-medium uppercase mr-2">Actions:</span>
-        <ActionButton label="Flag Urgent Review" variant="danger" onClick={() => handleAction("urgent_review_flagged", "Flagged for immediate bedside review")} />
-        <ActionButton label="Request Escalation" variant="danger" onClick={() => handleAction("escalation_requested", "Escalation to senior / ICU requested")} />
-        <ActionButton label="Pharmacy Review" variant="default" onClick={() => handleAction("pharmacy_review_flagged", "Flagged for pharmacist review")} />
-        <ActionButton
-          label={data.discharge_override === "discharge_approved" ? "Discharge Approved ✓" : "Approve Discharge"}
-          variant="success"
-          onClick={() => handleAction("discharge_approved", "Cleared for discharge")}
-          disabled={data.discharge_override === "discharge_approved"}
-        />
-        <ActionButton
-          label={data.discharge_override === "discharge_blocked" ? "Discharge Blocked ✓" : "Block Discharge"}
-          variant="danger"
-          onClick={() => handleAction("discharge_blocked", "Discharge blocked — see clinical note")}
-          disabled={data.discharge_override === "discharge_blocked"}
-        />
-        <button
-          onClick={() => setShowNoteInput(!showNoteInput)}
-          className="text-xs px-3 py-1.5 rounded font-medium border border-blue-300 text-blue-700 hover:bg-blue-50 cursor-pointer"
-        >
-          + Clinical Note
-        </button>
-      </div>
-
-      {/* Clinical Note Input */}
-      {showNoteInput && (
-        <div className="border border-gray-200 rounded-lg p-3 mb-4">
-          <textarea
-            value={actionNote}
-            onChange={(e) => setActionNote(e.target.value)}
-            placeholder="Enter clinical response note..."
-            className="w-full border border-gray-300 rounded p-2 text-sm mb-2 h-20 resize-none"
-          />
-          <div className="flex gap-2">
-            <ActionButton
-              label="Save Note"
-              variant="primary"
-              onClick={() => {
-                if (actionNote.trim()) {
-                  handleAction("clinical_note_added", actionNote.trim());
-                  setActionNote("");
-                  setShowNoteInput(false);
-                }
-              }}
-            />
-            <ActionButton label="Cancel" onClick={() => { setShowNoteInput(false); setActionNote(""); }} />
+          {/* Action buttons */}
+          <div className="flex items-center gap-3">
+            {refreshing && (
+              <div className="flex items-center gap-2 text-[10px] font-bold text-clinical-info uppercase tracking-widest animate-pulse mr-2">
+                <span className="w-2 h-2 rounded-full bg-clinical-info"></span>
+                Refreshing...
+              </div>
+            )}
+            <div className="flex gap-2">
+              <ActionButton label="Add Note" variant="primary" onClick={() => setShowNoteForm(!showNoteForm)} />
+              <ActionButton label="Escalate" variant="danger" onClick={() => handleAction("escalation_requested", "Consultant-initiated escalation")} disabled={actionLoading} />
+              <ActionButton label="Flag for Pharmacy" variant="warning" onClick={() => handleAction("pharmacy_review_flagged", "Medication review required")} disabled={actionLoading} />
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Overnight Summary */}
-      <Section title="Overnight Summary">
-        <p className="text-sm text-gray-700 leading-relaxed">{briefing.overnight_summary || "Not available"}</p>
-      </Section>
+        {/* Note form */}
+        {showNoteForm && (
+          <div className="mt-4 pt-4 border-t border-border">
+            <textarea
+              value={noteInput}
+              onChange={(e) => setNoteInput(e.target.value)}
+              placeholder="Enter clinical note..."
+              className="w-full border border-border rounded-lg p-3 text-sm h-20 resize-none focus:outline-none focus:ring-2 focus:ring-clinical-info/30 focus:border-clinical-info"
+            />
+            <div className="flex gap-2 mt-2">
+              <ActionButton
+                label="Save Note"
+                variant="primary"
+                onClick={() => {
+                  if (noteInput.trim()) {
+                    handleAction("clinical_note_added", noteInput.trim());
+                    setNoteInput("");
+                    setShowNoteForm(false);
+                  }
+                }}
+                disabled={actionLoading}
+              />
+              <ActionButton label="Cancel" onClick={() => { setShowNoteForm(false); setNoteInput(""); }} />
+            </div>
+          </div>
+        )}
+      </div>
 
-      {/* Conflicts with individual acknowledge */}
-      {data.conflicts?.length > 0 && (
-        <Section title={`Conflicts (${data.conflict_count})`}>
-          {data.conflicts.map((c, i) => (
-            <div key={i} className={`rounded p-3 mb-2 text-sm border ${c.acknowledged ? "bg-gray-50 border-gray-200" : "bg-red-50 border-red-200"}`}>
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <span className={`font-medium ${c.acknowledged ? "text-gray-500" : "text-red-700"}`}>
-                    [{c.severity}]
-                  </span>{" "}
-                  <span className={c.acknowledged ? "text-gray-500 line-through" : "text-red-900"}>
-                    {c.message}
+      {/* Two column layout */}
+      <div className="grid grid-cols-3 gap-6 mb-6">
+        {/* Left - 2 cols */}
+        <div className="col-span-2 space-y-6">
+          {/* Observations (Vital Trends) */}
+          {data.vital_trends?.length > 0 && (
+            <Card title="Observations (24h Trend)">
+              <VitalChart trends={data.vital_trends} />
+            </Card>
+          )}
+
+          {/* Laboratory Results */}
+          {data.lab_trends?.length > 0 && (
+            <Card title="Laboratory Results">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border-light">
+                    <th className="text-left py-2 text-[11px] font-semibold text-text-tertiary uppercase">Parameter</th>
+                    <th className="text-center py-2 text-[11px] font-semibold text-text-tertiary uppercase">Previous</th>
+                    <th className="text-center py-2 text-[11px] font-semibold text-text-tertiary uppercase">Latest</th>
+                    <th className="text-center py-2 text-[11px] font-semibold text-text-tertiary uppercase">Trend</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-light">
+                  {data.lab_trends.map((t, i) => (
+                    <tr key={i}>
+                      <td className="py-2.5 font-medium text-text-primary">{t.parameter || t.loinc}</td>
+                      <td className="py-2.5 text-center text-text-secondary">{t.oldest}</td>
+                      <td className="py-2.5 text-center font-semibold text-text-primary">{t.newest}</td>
+                      <td className="py-2.5 text-center">
+                        <TrendIndicator direction={t.direction} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
+
+          {/* Brief Summary */}
+          <Card title="Brief Summary">
+            <p className="text-sm text-text-secondary leading-relaxed">
+              {briefing.overnight_summary || "Summary not available. Review chart directly."}
+            </p>
+          </Card>
+
+          {/* Ward Round Key Points */}
+          <Card title="Ward Round Key Points">
+            <ul className="space-y-2">
+              {(briefing.ward_round_talking_points || []).map((pt, i) => (
+                <li key={i} className="flex items-start gap-2 text-sm text-text-secondary">
+                  <span className="text-text-tertiary mt-0.5 font-bold">-</span>
+                  <span>{pt}</span>
+                </li>
+              ))}
+              {(!briefing.ward_round_talking_points || briefing.ward_round_talking_points.length === 0) && (
+                <li className="text-sm text-text-tertiary">No key points available.</li>
+              )}
+            </ul>
+          </Card>
+
+          {/* Active Alerts */}
+          {data.conflict_count > 0 && (
+            <Card
+              title={`Active Alerts (${data.conflict_count})`}
+              headerRight={<Badge variant="critical">{data.conflict_count} unresolved</Badge>}
+            >
+              <div className="space-y-3">
+                {data.conflicts.map((c, i) => {
+                  const isAck = c.acknowledged;
+                  return (
+                    <div
+                      key={i}
+                      className={`rounded-lg p-4 border text-sm ${isAck ? "bg-surface-secondary border-border" : "bg-clinical-critical-bg border-clinical-critical-border"}`}
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <span className={`text-[11px] font-bold uppercase tracking-wider ${isAck ? "text-text-tertiary" : "text-clinical-critical"}`}>
+                            {c.severity}
+                          </span>
+                          <p className={`mt-1 ${isAck ? "text-text-tertiary line-through" : "text-text-primary font-medium"}`}>
+                            {c.message}
+                          </p>
+                        </div>
+                        {isAck ? (
+                          <Badge variant="success">Reviewed</Badge>
+                        ) : (
+                          <ActionButton
+                            label="Acknowledge"
+                            variant="danger"
+                            onClick={() => handleAction("conflict_acknowledged", `Reviewed: ${c.message?.slice(0, 80)}`, c.conflict_id)}
+                            disabled={actionLoading}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+        </div>
+
+
+        {/* Right sidebar - 1 col */}
+        <div className="space-y-6">
+          {/* Discharge Readiness */}
+          <Card title="Discharge Readiness">
+            <div className="mb-3">
+              <Badge variant={discharge.status === "Ready" ? "success" : discharge.status === "Requires Review" ? "warning" : "default"}>
+                {discharge.summary || discharge.status || "--"}
+              </Badge>
+              {data.discharge_override && (
+                <Badge variant={data.discharge_override === "discharge_approved" ? "success" : "critical"}>
+                  Override: {data.discharge_override.replace(/_/g, " ")}
+                </Badge>
+              )}
+            </div>
+            <div className="space-y-2">
+              {(discharge.checklist || []).map((c, i) => (
+                <div key={i} className="flex items-center gap-2.5 text-sm">
+                  <span className={`text-xs font-bold ${c.met ? "text-clinical-normal" : "text-clinical-critical"}`}>
+                    {c.met ? "\u2713" : "\u2717"}
+                  </span>
+                  <span className={c.met ? "text-text-secondary" : "text-clinical-critical font-medium"}>
+                    {c.item}
                   </span>
                 </div>
-                {c.acknowledged ? (
-                  <span className="text-xs text-green-600 font-medium whitespace-nowrap">Reviewed ✓</span>
-                ) : (
-                  <ActionButton
-                    label="Acknowledge"
-                    variant="default"
-                    onClick={() => handleAction("conflict_acknowledged", `Conflict reviewed: ${c.message?.slice(0, 80)}`, c.conflict_id)}
-                  />
-                )}
-              </div>
-            </div>
-          ))}
-        </Section>
-      )}
-
-      {/* Ward Round Talking Points */}
-      <Section title="Talking Points">
-        <ul className="list-disc list-inside text-sm text-gray-700 space-y-1">
-          {(briefing.ward_round_talking_points || []).map((pt, i) => (
-            <li key={i}>{pt}</li>
-          ))}
-        </ul>
-      </Section>
-
-      {/* Vital Trends */}
-      {data.vital_trends?.length > 0 && (
-        <Section title="Vital Trends (24h)">
-          <table className="w-full text-sm">
-            <thead className="text-xs text-gray-500 uppercase">
-              <tr><th className="text-left py-1">Parameter</th><th>Previous</th><th>Latest</th><th>Trend</th></tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {data.vital_trends.map((t, i) => (
-                <tr key={i} className={t.concerning ? "text-red-700 font-medium" : ""}>
-                  <td className="py-1">{t.parameter}</td>
-                  <td className="text-center">{t.oldest}</td>
-                  <td className="text-center">{t.newest}</td>
-                  <td className="text-center">{t.direction} {t.concerning ? "⚠" : ""}</td>
-                </tr>
               ))}
-            </tbody>
-          </table>
-        </Section>
-      )}
-
-      {/* Discharge Readiness */}
-      <Section title="Discharge Readiness">
-        <div className="flex items-center gap-2 mb-3">
-          <Badge color={data.discharge?.status === "Ready" ? "green" : data.discharge?.status === "Requires Review" ? "amber" : "red"}>
-            {data.discharge?.summary || data.discharge?.status}
-          </Badge>
-          {data.discharge_override && (
-            <Badge color={data.discharge_override === "discharge_approved" ? "green" : "red"}>
-              Doctor override: {data.discharge_override.replace(/_/g, " ")}
-            </Badge>
-          )}
-        </div>
-        <div className="space-y-1">
-          {(data.discharge?.checklist || []).map((c, i) => (
-            <div key={i} className="flex items-center gap-2 text-sm">
-              <span className={c.met ? "text-green-600" : "text-red-600"}>{c.met ? "✓" : "✗"}</span>
-              <span className={c.met ? "text-gray-600" : "text-red-600"}>{c.item}: {c.detail}</span>
             </div>
-          ))}
+            <div className="flex gap-2 mt-4 pt-3 border-t border-border">
+              <ActionButton
+                label="Approve Discharge"
+                variant="success"
+                onClick={() => handleAction("discharge_approved", "Clinically safe for discharge")}
+                disabled={actionLoading}
+              />
+              <ActionButton
+                label="Block"
+                variant="danger"
+                onClick={() => handleAction("discharge_blocked", "Discharge not safe at this time")}
+                disabled={actionLoading}
+              />
+            </div>
+          </Card>
+
+          {/* Active Conditions */}
+          {data.active_conditions?.length > 0 && (
+            <Card title="Active Conditions">
+              <div className="space-y-1.5">
+                {data.active_conditions.map((c, i) => (
+                  <div key={i} className="text-sm text-text-secondary bg-surface-secondary rounded-lg px-3 py-2">
+                    {c}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Safety Flags */}
+          {data.safety_flags?.length > 0 && (
+            <Card title="Safety Flags">
+              <div className="space-y-1.5">
+                {data.safety_flags.map((f, i) => (
+                  <div key={i} className="text-sm font-medium text-clinical-critical bg-clinical-critical-bg rounded-lg px-3 py-2 border border-clinical-critical-border">
+                    {f}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* FDA Drug Safety */}
+          {data.fda_safety?.drug_warnings?.length > 0 && (
+            <Card title="FDA Drug Warnings">
+              <div className="space-y-2">
+                {data.fda_safety.drug_warnings.map((w, i) => (
+                  <DrugWarningItem key={i} warning={w} />
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Proposed Plan */}
+          <Card title="Proposed Plan Adjustments">
+            <p className="text-sm text-text-secondary leading-relaxed">
+              {briefing.suggested_plan_adjustments || "No plan adjustments suggested."}
+            </p>
+          </Card>
         </div>
-      </Section>
+      </div>
 
-      {/* Suggested Plan */}
-      <Section title="Suggested Plan Adjustments">
-        <p className="text-sm text-gray-700">{briefing.suggested_plan_adjustments || "Not available"}</p>
-      </Section>
+      {/* Full width bottom sections */}
+      <div className="grid grid-cols-2 gap-6">
+        {/* Clinical Notes */}
+        <Card title="Clinical Notes">
+          {data.clinical_notes?.length > 0 ? (
+            <div className="space-y-4">
+              {data.clinical_notes.map((n, i) => (
+                <div key={i} className="border-l-3 border-clinical-info pl-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] font-bold text-text-primary uppercase">
+                      {n.type}
+                    </p>
+                    <p className="text-[10px] font-medium text-text-tertiary">
+                      {n.date?.slice(0, 16)?.replace("T", " ")}
+                    </p>
+                  </div>
+                  <p className="text-[10px] font-semibold text-clinical-info mt-0.5">
+                    {n.author}
+                  </p>
+                  <p className="text-sm text-text-secondary mt-1.5 leading-relaxed">{n.text?.slice(0, 500)}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-text-tertiary">No clinical notes available.</p>
+          )}
+        </Card>
 
-      {/* Clinical Activity Timeline */}
-      <Section title="Clinical Activity Timeline">
-        {data.actions?.length > 0 ? (
-          <div className="relative border-l-2 border-gray-200 ml-3 space-y-6 pb-4">
-            {[...data.actions].reverse().map((a, i) => {
-              const isEscalation = a.action_type.includes("urgent") || a.action_type.includes("escalation");
-              const isDischarge = a.action_type.includes("discharge");
-              const isNote = a.action_type === "clinical_note_added";
-              
-              return (
-                <div key={i} className="relative pl-6">
-                  {/* Timeline dot */}
-                  <div className={`absolute -left-[9px] top-1 w-4 h-4 rounded-full border-2 border-white shadow-sm ${
-                    isEscalation ? "bg-red-500" : isDischarge ? "bg-blue-500" : isNote ? "bg-amber-500" : "bg-gray-400"
-                  }`} />
-                  
-                  <div className="bg-white border border-gray-100 rounded-md p-3 shadow-sm">
-                    <div className="flex justify-between items-start mb-1">
-                      <span className="text-xs font-bold text-gray-900 uppercase">
+        {/* Activity Log */}
+        <Card title="Activity Log">
+          {data.actions?.length > 0 ? (
+            <div className="space-y-3">
+              {[...data.actions].reverse().map((a, i) => {
+                const typeColor =
+                  a.action_type.includes("urgent") || a.action_type.includes("escalation")
+                    ? "border-clinical-critical"
+                    : a.action_type.includes("discharge")
+                    ? "border-clinical-info"
+                    : "border-clinical-warning";
+                return (
+                  <div key={i} className={`border-l-3 ${typeColor} pl-4`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-text-primary uppercase">
                         {a.action_type.replace(/_/g, " ")}
                       </span>
-                      <span className="text-[10px] font-medium text-gray-400 tabular-nums">
-                        {new Date(a.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                      <span className="text-[10px] text-text-tertiary tabular-nums">
+                        {new Date(a.timestamp).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
                       </span>
                     </div>
-                    <p className="text-sm text-gray-700 leading-relaxed">
-                      {a.detail || "No additional detail provided."}
-                    </p>
-                    <div className="mt-2 pt-2 border-t border-gray-50 flex items-center gap-1.5">
-                      <div className="w-4 h-4 rounded-full bg-blue-100 flex items-center justify-center text-[8px] font-bold text-blue-600">
-                        {a.clinician?.charAt(0)}
-                      </div>
-                      <span className="text-[10px] font-medium text-gray-500">
-                        {a.clinician} &middot; Consultant
-                      </span>
-                    </div>
+                    <p className="text-sm text-text-secondary mt-0.5">{a.detail || "No detail provided."}</p>
+                    <p className="text-[10px] text-text-tertiary mt-1">{a.clinician}</p>
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <p className="text-sm text-gray-400 italic">No activity recorded for this session.</p>
-        )}
-      </Section>
-
-      {/* Clinical Notes */}
-      {data.clinical_notes?.length > 0 && (
-        <Section title="Clinical Notes">
-          {data.clinical_notes.map((n, i) => (
-            <div key={i} className="mb-3 border-l-2 border-gray-300 pl-3">
-              <p className="text-xs text-gray-400">{n.type} — {n.date?.slice(0, 16)}</p>
-              <p className="text-sm text-gray-700 mt-1">{n.text?.slice(0, 500)}</p>
+                );
+              })}
             </div>
-          ))}
-        </Section>
-      )}
+          ) : (
+            <p className="text-sm text-text-tertiary">No activity recorded for this session.</p>
+          )}
+        </Card>
+      </div>
+
+      {toast && <Toast message={toast} onClose={() => setToast("")} />}
     </div>
   );
+}
+
+function TrendIndicator({ direction }) {
+  if (direction === "increasing") return <span className="text-clinical-critical font-bold">{"\u2191"}</span>;
+  if (direction === "decreasing") return <span className="text-clinical-info font-bold">{"\u2193"}</span>;
+  return <span className="text-text-tertiary">{"\u2192"}</span>;
 }

@@ -1,6 +1,6 @@
-"""LLM integration for ward round briefings via DigitalOcean GenAI Agent.
+"""LLM integration for ward round briefings
 
-Calls NVIDIA Nemotron 3 Super 120B through DO's agent endpoint
+Calls NVIDIA Nemotron 3 Super 120B
 to generate per-patient ward round briefings.
 """
 
@@ -109,6 +109,35 @@ def _build_ward_context(patient_data: dict) -> str:
         lines.append("SAFETY FLAGS:")
         for f in sf:
             lines.append(f"  - {f}")
+        lines.append("")
+
+    # FDA Safety Data (from OpenFDA API)
+    fda = patient_data.get("fda_safety", {})
+    if fda:
+        warnings = fda.get("drug_warnings", [])
+        if warnings:
+            lines.append("FDA DRUG WARNINGS (from openFDA):")
+            for w in warnings:
+                drug = w.get("drug", "?")
+                parts = []
+                if w.get("boxed_warning"):
+                    parts.append("BOXED WARNING")
+                if w.get("has_contraindications"):
+                    parts.append("HAS CONTRAINDICATIONS")
+                lines.append(f"  - {drug}: {', '.join(parts)}")
+                if w.get("interaction_warnings"):
+                    lines.append(f"    Interactions: {w['interaction_warnings'][:200]}")
+            lines.append("")
+
+        evidence = fda.get("interaction_evidence", [])
+        if evidence:
+            lines.append("FDA ADVERSE EVENT EVIDENCE (from FAERS):")
+            for ev in evidence:
+                drugs = " + ".join(ev.get("drugs", []))
+                reports = ev.get("fda_reports", 0)
+                reactions = ", ".join(ev.get("top_reactions", []))
+                lines.append(f"  - {drugs}: {reports} reports. Top reactions: {reactions}")
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -201,7 +230,7 @@ async def generate_patient_briefing(patient_data: dict) -> dict:
         result = _parse_json_response(raw)
 
         if not result:
-            return _fallback_briefing(patient_data, "LLM returned unparseable response")
+            return _fallback_briefing(patient_data, "Response parsing error")
 
         required = ["overnight_summary", "conflict_highlights",
                      "ward_round_talking_points", "suggested_plan_adjustments"]
@@ -229,7 +258,7 @@ def _fallback_briefing(patient_data: dict, error: str) -> dict:
         "overnight_summary": (
             f"{name} - NEWS2: {news2.get('total_score', '?')} ({news2.get('risk_level', '?')}). "
             f"Conditions: {condition_text}. "
-            f"LLM unavailable - review chart directly."
+            f"Automated summary unavailable - review chart directly."
         ),
         "conflict_highlights": conflict_text,
         "ward_round_talking_points": [
@@ -237,8 +266,8 @@ def _fallback_briefing(patient_data: dict, error: str) -> dict:
             "Check medication chart",
             "Assess discharge readiness",
         ],
-        "suggested_plan_adjustments": "Unable to generate - LLM unavailable. Review data manually.",
-        "data_completeness": f"LLM unavailable ({error}). Showing rule-based data only.",
+        "suggested_plan_adjustments": "Automated suggestion unavailable. Review data manually.",
+        "data_completeness": f"Summary generation limit or error ({error}). Showing rule-based data only.",
     }
 
 

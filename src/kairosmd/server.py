@@ -1,12 +1,13 @@
 """KairosMD MCP Server - Multidisciplinary Ward Round Decision Support (MDS).
 
-Exposes 6 MCP tools:
+Exposes 7 MCP tools:
   1. get_ward_round_summary  - Full ward overview sorted by priority
   2. get_patient_ward_detail - Deep dive into single patient
   3. get_discharge_candidates - Patients ready or near-ready for discharge
   4. get_conflict_report     - All detected conflicts across the ward
   5. record_ward_action      - Record MDT clinical actions (acknowledge, escalate, etc.)
   6. get_action_history      - Chronological MDT activity log
+  7. get_drug_safety_info    - Real FDA drug label + adverse event lookup (OpenFDA)
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ fhir = FHIRClient()
 
 # Default practitioner ID (Dr. Mike)
 DEFAULT_PRACTITIONER_ID = "dr-mike"
+DASHBOARD_BASE_URL = "http://localhost:3000"
 
 # Priority sort order for ward round
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -97,9 +99,12 @@ async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
         # Fetch patient demographics
         patient = await fhir.get_patient(pid)
         name_parts = patient.get("name", [{}])[0]
-        given = " ".join(name_parts.get("given", [""]))
-        family = name_parts.get("family", "")
-        name = f"{given} {family}".strip() or "Unknown"
+        name = name_parts.get("text", "")
+        if not name:
+            given = " ".join(name_parts.get("given", [""]))
+            family = name_parts.get("family", "")
+            name = f"{given} {family}".strip()
+        name = name or "Unknown"
         dob = patient.get("birthDate", "")
         gender = patient.get("gender", "")
 
@@ -162,6 +167,11 @@ async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
             "discharge": {"status": "Requires Review"},
             "error": str(e),
             "llm_briefing": {"data_completeness": "incomplete"},
+            "care_team": [
+                {"name": "Dr. Mike", "role": "Lead Consultant (MDS)"},
+                {"name": "Dr. Sarah (Registrar)", "role": "Senior Resident"},
+                {"name": "Dr. Amir (HO)", "role": "Junior Doctor"}
+            ]
         }
 
 
@@ -170,7 +180,7 @@ async def warm_cache():
     """Pre-fetch all patient data on startup so the first request is instant."""
     print("\n--- [CACHE] Starting background cache warm-up... ---")
     try:
-        patient_ids = await _get_ward_patient_ids(fhir)
+        patient_ids = (await _get_ward_patient_ids(fhir))[:3]
         print(f"--- [CACHE] Warming data for {len(patient_ids)} patients... ---")
         
         for i, pid in enumerate(patient_ids):
@@ -193,23 +203,28 @@ async def warm_cache():
 
 # -- Helper: get all ward patient IDs ---------------------------------
 async def _get_ward_patient_ids(fhir: FHIRClient) -> list[str]:
-    """Get all patient IDs from active inpatient encounters in Ward 4."""
-    encounters = await fhir.get_encounters()
-    patient_ids = []
+    """Get all patient IDs from the ward manifest (created by seed.py).
     
-    # FILTER: Only include patients in our specific Ward
-    for enc in encounters:
-        locs = enc.get("location", [])
-        is_our_ward = any("General Medicine Ward" in l.get("location", {}).get("display", "") for l in locs)
-        
-        if is_our_ward:
-            ref = enc.get("subject", {}).get("reference", "")
-            if ref.startswith("Patient/"):
-                pid = ref.split("/")[1]
-                if pid not in patient_ids:
-                    patient_ids.append(pid)
+    On a shared public FHIR server, searching all encounters globally
+    returns other users' data. Instead, we read our own manifest.
+    """
+    import json as _json
+    from pathlib import Path
+
+    manifest_path = Path(__file__).parent / "ward_manifest.json"
     
-    return patient_ids
+    if not manifest_path.exists():
+        print("  [WARN] No ward_manifest.json found. Run `uv run python -m kairosmd.seed` first.")
+        return []
+    
+    try:
+        manifest = _json.loads(manifest_path.read_text())
+        patient_ids = [entry["patient_id"] for entry in manifest if "patient_id" in entry]
+        print(f"  [FHIR] Loaded {len(patient_ids)} patients from ward manifest.")
+        return patient_ids
+    except Exception as e:
+        print(f"  [WARN] Failed to read manifest: {e}")
+        return []
 
 
 # -- Helper: sort ward results ----------------------------------------
@@ -227,10 +242,13 @@ def _sort_ward_list(triage_list: list[dict]) -> list[dict]:
 # TOOL 1: get_ward_round_summary
 # =====================================================================
 @mcp.tool()
-async def get_ward_round_summary() -> str:
-    """Get the morning ward round summary for all inpatient patients.
+async def get_ward_round_summary(limit: int = 3) -> str:
+    """Get the morning ward round summary for inpatient patients.
 
-    Returns a prioritised list of all patients on the ward with:
+    Args:
+        limit: Maximum number of patients to process (default 5 for fast loading).
+
+    Returns a prioritised list of patients on the ward with:
     - NEWS2 score and risk level
     - Overnight change detection
     - Conflict alerts
@@ -239,12 +257,13 @@ async def get_ward_round_summary() -> str:
 
     Sorted by clinical priority (high risk first, discharge ready last).
     """
-    patient_ids = await _get_ward_patient_ids(fhir)
+    all_patient_ids = await _get_ward_patient_ids(fhir)
+    patient_ids = all_patient_ids[:limit]
 
     if not patient_ids:
         return json.dumps({
             "error": "No active inpatient encounters found",
-            "dashboard_url": "/dashboard",
+            "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard",
         })
 
     # Process patients sequentially with rate limiting
@@ -274,7 +293,7 @@ async def get_ward_round_summary() -> str:
         "active_conflicts": conflicts_total,
         "discharge_candidates": discharge_ready,
         "patients": ward_list,
-        "dashboard_url": "/dashboard",
+        "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard",
     }, indent=2)
 
     print(f"\n--- [LOG] Ward Round Summary: {len(ward_list)} patients ---")
@@ -295,7 +314,7 @@ async def get_patient_ward_detail(patient_id: str) -> str:
     notes, NEWS2 score, conflicts, discharge readiness, and AI briefing.
     """
     entry = await _process_patient(patient_id, fhir)
-    entry["dashboard_url"] = f"/dashboard/patient/{patient_id}"
+    entry["dashboard_url"] = f"{DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}"
 
     result = json.dumps(entry, indent=2)
     print(f"\n--- [LOG] Patient Detail: {entry.get('name', 'Unknown')} ---")
@@ -333,7 +352,7 @@ async def get_discharge_candidates() -> str:
         "date": date.today().isoformat(),
         "candidate_count": len(candidates),
         "candidates": candidates,
-        "dashboard_url": "/dashboard/discharge",
+        "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard/discharge",
     }, indent=2)
 
     print(f"\n--- [LOG] Discharge Candidates: {len(candidates)} ---")
@@ -374,7 +393,7 @@ async def get_conflict_report() -> str:
         "patients_with_conflicts": len(conflict_patients),
         "total_conflicts": total_conflicts,
         "patients": conflict_patients,
-        "dashboard_url": "/dashboard/conflicts",
+        "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard/conflicts",
     }, indent=2)
 
     print(f"\n--- [LOG] Conflict Report: {total_conflicts} conflicts ---")
@@ -390,6 +409,7 @@ async def record_ward_action(
     action_type: str,
     detail: str = "",
     conflict_id: str = "",
+    clinician: str = "Dr. Mike",
 ) -> str:
     """Record a clinical action taken by the doctor.
 
@@ -408,12 +428,14 @@ async def record_ward_action(
             - pharmacy_review_flagged: Flag medication concern for pharmacist
         detail: Free text note from the clinician explaining the action.
         conflict_id: If acknowledging a specific conflict, its ID.
+        clinician: Name of the acting clinician.
     """
     action = record_action(
         patient_id=patient_id,
         action_type=action_type,
         detail=detail,
         conflict_id=conflict_id,
+        clinician=clinician,
     )
 
     # PERSISTENCE LAYER: Write back to FHIR for certain action types
@@ -468,11 +490,74 @@ async def get_action_history(patient_id: str) -> str:
         "patient_id": patient_id,
         "action_count": len(actions),
         "history": actions,
-        "dashboard_url": f"/dashboard/patient/{patient_id}#timeline",
+        "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}#timeline",
     }, indent=2)
 
     print(f"\n--- [LOG] History requested for {patient_id}: {len(actions)} entries ---")
     return result
+
+
+# =====================================================================
+# TOOL 7: get_drug_safety_info
+# =====================================================================
+@mcp.tool()
+async def get_drug_safety_info(drug_name: str, check_interaction_with: str = "") -> str:
+    """Look up real FDA safety data for a drug using OpenFDA APIs.
+
+    Returns FDA label warnings, contraindications, and real-world
+    adverse event data from the FDA Adverse Event Reporting System (FAERS).
+
+    If check_interaction_with is provided, also returns adverse event
+    reports where both drugs appear together.
+
+    Args:
+        drug_name: The drug name to look up (e.g. "Amiodarone").
+        check_interaction_with: Optional second drug to check combo adverse events.
+    """
+    from kairosmd.external_apis import (
+        get_drug_label, get_adverse_events, get_combo_adverse_events, get_drug_class,
+    )
+
+    result = {"drug": drug_name}
+
+    # FDA Label
+    label = await get_drug_label(drug_name)
+    if label:
+        result["fda_label"] = {
+            "boxed_warning": label.get("boxed_warning", ""),
+            "contraindications": label.get("contraindications", ""),
+            "drug_interactions": label.get("drug_interactions", ""),
+            "adverse_reactions_summary": label.get("adverse_reactions", "")[:500],
+        }
+    else:
+        result["fda_label"] = None
+
+    # Adverse events
+    adverse = await get_adverse_events(drug_name, limit=10)
+    if adverse:
+        result["adverse_events"] = {
+            "total_reports": adverse.get("total_reports", 0),
+            "top_reactions": adverse.get("top_adverse_reactions", []),
+        }
+
+    # Drug class
+    classes = await get_drug_class(drug_name)
+    if classes:
+        result["drug_classes"] = classes
+
+    # Combo check
+    if check_interaction_with:
+        combo = await get_combo_adverse_events(drug_name, check_interaction_with)
+        if combo:
+            result["interaction_evidence"] = {
+                "with": check_interaction_with,
+                "total_combo_reports": combo.get("total_combo_reports", 0),
+                "top_reactions_together": combo.get("top_reactions_together", []),
+            }
+
+    output = json.dumps(result, indent=2)
+    print(f"\n--- [LOG] Drug safety lookup: {drug_name} ---")
+    return output
 
 
 # -- Entry point -------------------------------------------------------

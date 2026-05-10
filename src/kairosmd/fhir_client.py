@@ -206,23 +206,48 @@ class FHIRClient:
         """Create a new resource on the FHIR server."""
         client = await self._get_client()
         resp = await client.post(f"/{resource}", json=data)
-        if resp.status_code not in (200, 201):
-            print(f"  [FHIR] Error creating {resource}: {resp.status_code} - {resp.text[:300]}")
-            resp.raise_for_status()
+        if resp.status_code in (200, 201):
+            return resp.json()
+        if resp.status_code == 412:
+            # Duplicate resource — already exists from a previous seed run. Safe to skip.
+            print(f"  [FHIR] Skipping duplicate {resource} (412)")
+            return {"resourceType": resource, "id": "existing"}
+        print(f"  [FHIR] Error creating {resource}: {resp.status_code} - {resp.text[:300]}")
+        resp.raise_for_status()
         return resp.json()
 
     async def create_patient(self, name: str, gender: str, birthDate: str) -> dict:
-        """Create a Patient resource."""
+        """Create a Patient resource, or return existing one if duplicate."""
+        # Search for existing patient with same name first (idempotent)
+        existing = await self.search("Patient", {"name": name, "_count": "1"})
+        if existing:
+            print(f"  [FHIR] Found existing Patient: {name} (id={existing[0]['id']})")
+            return existing[0]
+
         p = {
             "resourceType": "Patient",
             "name": [{"text": name}],
             "gender": gender,
             "birthDate": birthDate,
         }
-        return await self._post("Patient", p)
+        try:
+            return await self._post("Patient", p)
+        except Exception:
+            # If creation still fails (412), try searching again
+            existing = await self.search("Patient", {"name": name, "_count": "1"})
+            if existing:
+                print(f"  [FHIR] Recovered existing Patient: {name} (id={existing[0]['id']})")
+                return existing[0]
+            raise
 
     async def create_encounter(self, patient_id: str, status: str, start_time: str, ward: str, bed: str, reason: str) -> dict:
-        """Create an inpatient Encounter resource."""
+        """Create an inpatient Encounter resource, or return existing one."""
+        # Check if patient already has an active encounter
+        existing = await self.get_encounters(patient_id)
+        if existing:
+            print(f"  [FHIR] Found existing Encounter for Patient/{patient_id}")
+            return existing[0]
+
         e = {
             "resourceType": "Encounter",
             "status": status,
@@ -235,17 +260,27 @@ class FHIRClient:
                 "status": "active"
             }]
         }
-        return await self._post("Encounter", e)
+        try:
+            return await self._post("Encounter", e)
+        except Exception:
+            existing = await self.get_encounters(patient_id)
+            if existing:
+                return existing[0]
+            raise
 
-    async def create_observation(self, patient_id: str, code: str, value: float, timestamp: str, encounter_id: str = None) -> dict:
+    async def create_observation(self, patient_id: str, code: str, value: float, timestamp: str, encounter_id: str = None, display: str = None) -> dict:
         """Create an Observation (vitals or labs)."""
         category = "vital-signs" if code in ["9279-1", "59408-5", "8480-6", "8867-4", "8310-5", "67775-7"] else "laboratory"
         
+        coding = {"system": "http://loinc.org", "code": code}
+        if display:
+            coding["display"] = display
+
         obs = {
             "resourceType": "Observation",
             "status": "final",
             "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": category}]}],
-            "code": {"coding": [{"system": "http://loinc.org", "code": code}]},
+            "code": {"coding": [coding]},
             "subject": {"reference": f"Patient/{patient_id}"},
             "effectiveDateTime": timestamp,
             "valueQuantity": {"value": value}

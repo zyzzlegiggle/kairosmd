@@ -28,6 +28,12 @@ def detect_allergy_conflicts(
     """Check if any active medication matches a documented allergy."""
     conflicts = []
     allergy_substances = []
+
+    # Cross-class drug families (allergy to one = allergy to all)
+    PENICILLIN_FAMILY = {"penicillin", "penicillin g", "amoxicillin", "ampicillin",
+                         "flucloxacillin", "co-amoxiclav", "piperacillin",
+                         "benzylpenicillin", "phenoxymethylpenicillin"}
+
     for a in allergies:
         substance = a.get("code", {}).get("text", "")
         reaction = ""
@@ -43,8 +49,15 @@ def detect_allergy_conflicts(
             codings = med.get("medicationCodeableConcept", {}).get("coding", [])
             med_name = codings[0].get("display", "") if codings else ""
 
+        med_lower = med_name.lower().split()[0] if med_name else ""  # base name
+
         for substance, reaction in allergy_substances:
-            if substance.lower() in med_name.lower() or med_name.lower() in substance.lower():
+            # Direct substring match
+            direct_match = substance in med_lower or med_lower in substance
+            # Cross-class match (penicillin family)
+            class_match = (substance in PENICILLIN_FAMILY and med_lower in PENICILLIN_FAMILY)
+
+            if direct_match or class_match:
                 conflicts.append({
                     "type": "allergy_medication_conflict",
                     "severity": CRITICAL,
@@ -52,7 +65,9 @@ def detect_allergy_conflicts(
                     "allergy": substance,
                     "reaction": reaction,
                     "message": (f"ALLERGY CONFLICT: {med_name} prescribed but patient "
-                                f"has documented allergy to {substance} ({reaction})"),
+                                f"has documented allergy to {substance}"
+                                + (f" ({reaction})" if reaction else "")
+                                + (" [same drug class]" if class_match and not direct_match else "")),
                 })
     return conflicts
 
@@ -170,6 +185,9 @@ def detect_note_vital_conflict(
             concerning = False
             detail = ""
             if loinc == "2708-6" and val < 92:
+                concerning = True
+                detail = f"SpO2 {val}%"
+            elif loinc == "59408-5" and val < 92:
                 concerning = True
                 detail = f"SpO2 {val}%"
             elif loinc == "8867-4" and val > 110:

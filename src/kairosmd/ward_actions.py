@@ -27,7 +27,7 @@ def record_action(
     action_type: str,
     detail: str = "",
     conflict_id: str = "",
-    clinician: str = "Dr Reynolds",
+    clinician: str = "Dr. Mike",
 ) -> dict:
     """Record a clinical action for a patient.
 

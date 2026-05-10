@@ -6,6 +6,7 @@ patient summary dict ready for LLM briefing and dashboard display.
 """
 
 from __future__ import annotations
+import asyncio
 import base64
 from datetime import datetime, timezone
 
@@ -36,6 +37,7 @@ def _extract_note_text(doc_refs: list[dict]) -> list[dict]:
             text = doc.get("description", "")
         results.append({
             "type": doc.get("type", {}).get("text", "Note"),
+            "author": doc.get("author", [{}])[0].get("display", "Unknown Clinician"),
             "date": doc.get("date", ""),
             "text": text,
         })
@@ -108,6 +110,23 @@ def _detect_overnight_trends(vitals_obs: list[dict]) -> list[dict]:
     return trends
 
 
+LAB_DISPLAY_MAP = {
+    "6299-1": "WBC",
+    "1988-5": "CRP",
+    "2019-8": "Lactate",
+    "2160-0": "Creatinine",
+    "33914-3": "eGFR",
+    "30522-7": "BNP",
+    "2823-3": "Potassium",
+    "2028-9": "CO2",
+    "20570-8": "HbA1c",
+    "2276-4": "Ferritin",
+    "718-7": "Hemoglobin",
+    "2345-7": "Glucose",
+    "4544-3": "HbA1c",
+}
+
+
 def _detect_lab_trends(labs_obs: list[dict]) -> list[dict]:
     """Compare lab values over time and flag changes."""
     by_code: dict[str, list[tuple[str, float, str]]] = {}
@@ -118,7 +137,7 @@ def _detect_lab_trends(labs_obs: list[dict]) -> list[dict]:
         for c in codings:
             if c.get("system") == "http://loinc.org":
                 loinc = c.get("code", "")
-                display = c.get("display", loinc)
+                display = c.get("display") or LAB_DISPLAY_MAP.get(loinc, loinc)
         val = obs.get("valueQuantity", {}).get("value")
         dt = obs.get("effectiveDateTime", "")
         if loinc and val is not None:
@@ -200,7 +219,7 @@ async def compile_patient_ward_data(
     # 1. NEWS2
     news2 = calculate_news2_from_observations(vitals)
 
-    # 2. Conflicts
+    # 2. Conflicts (local rule engine)
     conflicts = detect_all_conflicts(medications, allergies, med_admins, notes, vitals)
 
     # 3. Discharge readiness
@@ -236,6 +255,9 @@ async def compile_patient_ward_data(
     for f in flags:
         safety_flags.append(f.get("code", {}).get("text", ""))
 
+    # 10. FDA Safety Enrichment (real external API data)
+    fda_safety = await _enrich_with_fda_data(medications, conflicts)
+
     return {
         "encounter": enc_info,
         "news2": news2,
@@ -250,4 +272,55 @@ async def compile_patient_ward_data(
         "clinical_notes": parsed_notes,
         "safety_flags": safety_flags,
         "priority": news2["risk_level"],
+        "fda_safety": fda_safety,
     }
+
+
+async def _enrich_with_fda_data(medications: list[dict], conflicts: list[dict]) -> dict:
+    """Fetch real FDA data for medications and drug interaction conflicts.
+    
+    Non-blocking: if OpenFDA is slow or down, returns empty gracefully.
+    """
+    from kairosmd.external_apis import get_drug_label, get_combo_adverse_events
+    
+    fda_data = {"drug_warnings": [], "interaction_evidence": []}
+
+    try:
+        # Get FDA warnings for each active medication
+        med_names = []
+        for med in medications:
+            name = med.get("medicationCodeableConcept", {}).get("text", "")
+            if name:
+                base = name.split()[0]  # "Amoxicillin 500mg" → "Amoxicillin"
+                med_names.append(base)
+
+        # Fetch labels (with rate limiting)
+        for name in med_names[:6]:  # Cap at 6 to avoid API overload
+            label = await get_drug_label(name)
+            if label and (label.get("boxed_warning") or label.get("contraindications")):
+                fda_data["drug_warnings"].append({
+                    "drug": name,
+                    "boxed_warning": bool(label.get("boxed_warning")),
+                    "has_contraindications": bool(label.get("contraindications")),
+                    "interaction_warnings": label.get("drug_interactions", "")[:300],
+                })
+            await asyncio.sleep(0.15)
+
+        # For detected drug interactions, get real-world adverse event evidence
+        for conflict in conflicts:
+            if conflict.get("type") == "drug_drug_interaction":
+                drugs = conflict.get("drugs", [])
+                if len(drugs) >= 2:
+                    combo = await get_combo_adverse_events(drugs[0], drugs[1])
+                    if combo and combo.get("total_combo_reports", 0) > 0:
+                        fda_data["interaction_evidence"].append({
+                            "drugs": drugs,
+                            "fda_reports": combo["total_combo_reports"],
+                            "top_reactions": [r["reaction"] for r in combo.get("top_reactions_together", [])[:3]],
+                        })
+                    await asyncio.sleep(0.15)
+
+    except Exception as e:
+        fda_data["api_error"] = str(e)
+
+    return fda_data

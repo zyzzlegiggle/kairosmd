@@ -1,28 +1,35 @@
 import "./globals.css";
+import Sidebar from "@/components/Sidebar";
 
 export const metadata = {
-  title: "KairosMD - Ward Round Dashboard",
-  description: "Inpatient ward round decision support system",
+  title: "KairosMD — Ward Round Decision Support",
+  description: "Multidisciplinary Clinical Decision Support System",
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className="bg-white text-gray-900 min-h-screen">
-        <nav className="border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-lg font-semibold">KairosMD</h1>
-            <span className="text-xs text-gray-400 border-l border-gray-300 pl-3">
-              Ward Round Dashboard
-            </span>
+      <body className="min-h-screen flex">
+        {/* Sidebar Navigation */}
+        <Sidebar />
+
+        {/* Main content */}
+        <main className="ml-60 flex-1 min-h-screen">
+          {/* Top bar */}
+          <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-border px-8 py-3 flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-text-primary">General Medicine Ward 4</h2>
+              <p className="text-xs text-text-tertiary">
+                {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+              </p>
+            </div>
+          </header>
+
+          {/* Page content */}
+          <div className="p-8">
+            {children}
           </div>
-          <div className="flex gap-4 text-sm">
-            <a href="/dashboard" className="text-gray-600 hover:text-gray-900">Ward</a>
-            <a href="/dashboard/conflicts" className="text-gray-600 hover:text-gray-900">Conflicts</a>
-            <a href="/dashboard/discharge" className="text-gray-600 hover:text-gray-900">Discharge</a>
-          </div>
-        </nav>
-        <main className="p-6">{children}</main>
+        </main>
       </body>
     </html>
   );

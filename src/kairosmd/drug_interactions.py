@@ -16,6 +16,12 @@ KNOWN_INTERACTIONS = {
     frozenset(["zolpidem", "gabapentin"]): "Excessive sedation and fall risk",
     frozenset(["zolpidem", "tramadol"]): "Excessive CNS depression",
     frozenset(["sertraline", "zolpidem"]): "Increased sedation",
+    # Pairs from MDS seed scenarios
+    frozenset(["digoxin", "amiodarone"]): "Amiodarone doubles digoxin levels - risk of toxicity",
+    frozenset(["heparin", "ibuprofen"]): "NSAID with anticoagulant - increased bleeding risk",
+    frozenset(["heparin", "aspirin"]): "Dual anticoagulant/antiplatelet - major bleeding risk",
+    frozenset(["warfarin", "clarithromycin"]): "Clarithromycin increases warfarin levels - bleeding risk",
+    frozenset(["ramipril", "spironolactone"]): "Hyperkalemia risk - dual RAAS blockade",
 }
 
 
