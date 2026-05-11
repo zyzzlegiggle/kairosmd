@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { callMCPTool } from "../../lib/mcp";
+import { callMCPTool } from "@/lib/mcp";
 
 function StatCard({ label, value, variant = "default" }) {
   const colors = {

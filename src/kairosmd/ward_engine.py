@@ -105,7 +105,6 @@ def _detect_overnight_trends(vitals_obs: list[dict]) -> list[dict]:
             "direction": direction,
             "change_pct": round(pct, 1),
             "concerning": concerning,
-            "history": [{"time": r[0], "value": r[1]} for r in readings],
         })
 
     return trends
@@ -163,7 +162,6 @@ def _detect_lab_trends(labs_obs: list[dict]) -> list[dict]:
             "parameter": display, "loinc": loinc,
             "oldest": oldest_val, "newest": newest_val,
             "direction": direction,
-            "history": [{"time": r[0], "value": r[1]} for r in readings],
         })
 
     return trends

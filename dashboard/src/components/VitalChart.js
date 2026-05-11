@@ -29,19 +29,10 @@ export default function VitalChart({ trends }) {
       {trends.map((t, i) => {
         const meta = VITAL_LABELS[t.loinc] || { name: t.parameter || t.loinc, unit: "", color: "#64748b" };
         const displayName = meta.name;
-        let points = [];
-        if (t.history && t.history.length > 0) {
-          points = t.history.map((h, idx) => ({
-            name: new Date(h.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            value: h.value
-          }));
-        } else {
-          points = [
-            { name: "Prev", value: t.oldest },
-            { name: "Now", value: t.newest },
-          ];
-        }
-        
+        const points = [
+          { name: "Prev", value: t.oldest },
+          { name: "Now", value: t.newest },
+        ];
         const diff = t.newest - t.oldest;
         const sign = diff > 0 ? "+" : "";
 

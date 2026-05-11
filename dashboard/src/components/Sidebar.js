@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { callMCPTool } from "../lib/mcp";
+import { callMCPTool } from "@/lib/mcp";
 
 function NavLink({ href, label, icon, active = false }) {
   return (
@@ -91,52 +91,20 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Clinician Identity Switcher */}
+      {/* Clinician Identity */}
       <div className="px-4 py-4 border-t border-white/10 bg-black/10">
         <div className="mb-3">
           <p className="text-[10px] text-sidebar-text font-bold uppercase tracking-widest opacity-60">Acting Clinician</p>
         </div>
-        <div className="space-y-2">
-          {[
-            { name: "Dr. Mike", role: "Consultant", initial: "DM" },
-            { name: "Dr. Sarah", role: "Registrar", initial: "DS" }
-          ].map((doc) => {
-            let isSelected = false;
-            if (typeof window !== 'undefined') {
-              const current = localStorage.getItem("clinician_name") || "Dr. Mike";
-              isSelected = current === doc.name;
-            } else {
-              // Server-side default
-              isSelected = doc.name === "Dr. Mike";
-            }
-            
-            return (
-              <button
-                key={doc.name}
-                onClick={() => {
-                  if (typeof window !== 'undefined') {
-                    localStorage.setItem("clinician_name", doc.name);
-                    localStorage.setItem("clinician_role", doc.role);
-                    window.location.reload();
-                  }
-                }}
-                className={`w-full flex items-center gap-3 p-2 rounded-lg transition-all text-left ${
-                  isSelected ? "bg-white/10 ring-1 ring-white/20" : "hover:bg-white/5 opacity-50"
-                }`}
-              >
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${
-                  isSelected ? "bg-clinical-info" : "bg-sidebar-text/20"
-                }`}>
-                  {doc.initial}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-xs font-bold text-white truncate">{doc.name}</p>
-                  <p className="text-[9px] text-sidebar-text truncate">{doc.role}</p>
-                </div>
-                {isSelected && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-clinical-info" />}
-              </button>
-            );
-          })}
+        <div className="flex items-center gap-3 p-2 rounded-lg bg-white/10 ring-1 ring-white/20">
+          <div className="w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white bg-clinical-info">
+            DM
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-white truncate">Dr. Mike</p>
+            <p className="text-[9px] text-sidebar-text truncate">Consultant</p>
+          </div>
+          <div className="ml-auto w-1.5 h-1.5 rounded-full bg-clinical-info" />
         </div>
       </div>
     </aside>

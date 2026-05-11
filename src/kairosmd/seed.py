@@ -84,7 +84,6 @@ async def seed_patient_scenario(s: dict):
     members = [
         {"name": p_info["consultant"]["name"], "role": "Responsible Consultant"},
         {"name": "Dr. Mike", "role": "Lead Consultant (MDS)"},
-        {"name": "Dr. Sarah (Registrar)", "role": "Senior Resident"},
         {"name": "Dr. Amir (HO)", "role": "Junior Doctor"},
         {"name": random.choice(NURSES), "role": "Primary Nurse"}
     ]

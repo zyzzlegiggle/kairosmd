@@ -1,10 +1,10 @@
 "use client";
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
-import { callMCPTool, invalidatePatientCache } from "../../../../lib/mcp";
+import { callMCPTool, invalidatePatientCache } from "@/lib/mcp";
 import dynamic from "next/dynamic";
 
-const VitalChart = dynamic(() => import("../../../../components/VitalChart"), { ssr: false });
+const VitalChart = dynamic(() => import("@/components/VitalChart"), { ssr: false });
 
 /* ── Tiny helpers ─────────────────────────────────────────────── */
 
@@ -26,10 +26,10 @@ function Card({ title, children, className = "", accent = "", headerRight = null
 function Badge({ children, variant = "default" }) {
   const s = {
     critical: "bg-clinical-critical/10 text-clinical-critical border border-clinical-critical/20",
-    warning:  "bg-clinical-warning-bg text-clinical-warning border border-clinical-warning-border",
-    success:  "bg-clinical-normal-bg text-clinical-normal border border-clinical-normal-border",
-    info:     "bg-clinical-info-bg text-clinical-info border border-clinical-info-border",
-    default:  "bg-surface-secondary text-text-secondary border border-border",
+    warning: "bg-clinical-warning-bg text-clinical-warning border border-clinical-warning-border",
+    success: "bg-clinical-normal-bg text-clinical-normal border border-clinical-normal-border",
+    info: "bg-clinical-info-bg text-clinical-info border border-clinical-info-border",
+    default: "bg-surface-secondary text-text-secondary border border-border",
   };
   return <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-md ${s[variant]}`}>{children}</span>;
 }
@@ -84,7 +84,7 @@ export default function PatientDetailPage({ params }) {
         });
         setWardList(sorted);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   const currentIdx = wardList.findIndex(p => p.patient_id === id);
@@ -139,28 +139,31 @@ export default function PatientDetailPage({ params }) {
   if (loading) return <LoadingSkeleton />;
   if (!data) return <p className="text-text-tertiary text-sm p-8">Patient not found.</p>;
 
-  const briefing  = data.llm_briefing || {};
-  const news2     = data.news2 || {};
-  const enc       = data.encounter || {};
+  const briefing = data.llm_briefing || {};
+  const news2 = data.news2 || {};
+  const enc = data.encounter || {};
   const discharge = data.discharge || {};
-  
+
   // ── DEDUPLICATION LOGIC ──
   // 1. Conflicts
   const rawAlerts = data.conflicts || [];
-  const alerts    = [...new Map(rawAlerts.map(a => [a.message, a])).values()];
-  
+  const alerts = [...new Map(rawAlerts.map(a => [a.message, a])).values()];
+
   // 2. Safety Flags
-  const rawFlags  = data.safety_flags || [];
-  const flags     = [...new Set(rawFlags)];
-  
+  const rawFlags = data.safety_flags || [];
+  const flags = [...new Set(rawFlags)];
+
   // 3. Clinical Notes
-  const rawNotes  = data.clinical_notes || [];
-  const clinicalNotes = [...new Map(rawNotes.map(n => [`${n.date}-${n.text.slice(0,50)}`, n])).values()];
-  
+  const rawNotes = data.clinical_notes || [];
+  const clinicalNotes = [...new Map(rawNotes.map(n => [`${n.date}-${n.text.slice(0, 50)}`, n])).values()];
+
   // 4. Medications
-  const rawMeds   = data.active_medications || [];
+  const rawMeds = data.active_medications || [];
   const activeMeds = [...new Map(rawMeds.map(m => [m.name, m])).values()];
-  
+
+  // 5. Allergies
+  const uniqueAllergies = [...new Map((data.allergies || []).map(a => [a.name, a])).values()];
+
   const hasAlerts = alerts.length > 0 || flags.length > 0;
 
   const riskColor = news2.risk_level === "HIGH" ? "critical" : news2.risk_level === "MEDIUM" ? "warning" : "success";
@@ -178,6 +181,13 @@ export default function PatientDetailPage({ params }) {
             <div className="flex items-center gap-2 mt-1">
               <Badge variant={riskColor}>NEWS2 {news2.total_score ?? "--"}</Badge>
               {hasAlerts && <Badge variant="critical">{alerts.filter(a => !a.acknowledged).length} Active Conflict{alerts.filter(a => !a.acknowledged).length !== 1 ? "s" : ""}</Badge>}
+              
+              {/* Condensed Allergies in Header */}
+              {uniqueAllergies.map((a, i) => (
+                <span key={i} className={`text-[9px] font-black px-2 py-0.5 rounded border uppercase flex items-center gap-1 ${a.criticality === 'high' ? 'bg-clinical-critical/10 border-clinical-critical/20 text-clinical-critical' : 'bg-surface-secondary border-border text-text-secondary'}`}>
+                  <span className="opacity-50">⚠️</span> {a.name}
+                </span>
+              ))}
             </div>
           </div>
 
@@ -279,7 +289,7 @@ export default function PatientDetailPage({ params }) {
                 ))}
               </div>
             )}
-            
+
             {/* Ready / Met */}
             {discharge.checklist?.some(c => c.met) && (
               <div className="space-y-1">
@@ -372,31 +382,11 @@ export default function PatientDetailPage({ params }) {
             </div>
           </Card>
 
-          {/* Audit Trail (Unlocked) */}
-          {data.audit_trail?.length > 0 && (
-            <Card title="Clinical Audit Trail">
-              <div className="space-y-4">
-                {data.audit_trail.map((entry, i) => (
-                  <div key={i} className="flex gap-3 text-xs">
-                    <div className="w-1 bg-clinical-info/20 rounded-full shrink-0" />
-                    <div>
-                      <div className="flex items-center gap-2 mb-0.5">
-                        <span className="font-bold text-text-primary">{entry.from}</span>
-                        <span className="text-[10px] text-text-tertiary">→ {entry.to}</span>
-                        <span className="text-[9px] text-text-tertiary tabular-nums ml-auto">{entry.date?.slice(5, 16).replace('T', ' ')}</span>
-                      </div>
-                      <p className="text-text-secondary leading-relaxed">{entry.message}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
 
           {/* Conflicts (only if any exist) */}
           {hasAlerts && (
-            <Card 
-              title={`Conflicts & Safety Flags`} 
+            <Card
+              title={`Conflicts & Safety Flags`}
               accent="border-l-4 border-l-clinical-critical"
               headerRight={<Badge variant="critical">{alerts.filter(a => !a.acknowledged).length} Active Conflict{alerts.filter(a => !a.acknowledged).length !== 1 ? "s" : ""}</Badge>}
             >
@@ -417,7 +407,7 @@ export default function PatientDetailPage({ params }) {
                             </div>
                             <div className="flex items-center gap-2 mt-0.5 ml-3.5">
                               <span className="text-[9px] font-black text-clinical-critical/70 uppercase tracking-tighter">{c.severity}</span>
-                              <span className="text-[9px] text-text-tertiary uppercase tabular-nums">Ref: MDT-RULE-0{i+1}</span>
+                              <span className="text-[9px] text-text-tertiary uppercase tabular-nums">Ref: MDT-RULE-0{i + 1}</span>
                             </div>
                           </div>
                           {!ack && (
@@ -502,11 +492,11 @@ export default function PatientDetailPage({ params }) {
 
           {/* Drug Safety */}
           {data.fda_safety?.drug_warnings?.length > 0 && (
-            <Card 
-              title="Drug Safety" 
+            <Card
+              title="Drug Safety"
               footer={
                 <div className="mt-2 text-[9px] text-text-tertiary italic text-right">
-                  Powered by OpenFDA Real-time Intelligence
+                  Powered by OpenFDA
                 </div>
               }
             >
@@ -518,19 +508,6 @@ export default function PatientDetailPage({ params }) {
             </Card>
           )}
 
-          {/* Allergies (Unlocked) */}
-          {data.allergies?.length > 0 && (
-            <Card title="Allergies">
-              <div className="flex flex-wrap gap-2">
-                {data.allergies.map((a, i) => (
-                  <div key={i} className={`flex items-center gap-2 px-2.5 py-1 rounded-lg border ${a.criticality === 'high' ? 'bg-clinical-critical/10 border-clinical-critical/20 text-clinical-critical' : 'bg-surface-secondary border-border text-text-secondary'}`}>
-                    <span className="text-xs font-bold">{a.name}</span>
-                    <span className="text-[9px] font-black uppercase tracking-widest opacity-50">{a.criticality}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          )}
         </div>
       </div>
 
@@ -545,7 +522,7 @@ export default function PatientDetailPage({ params }) {
       <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none">
         <div className="bg-white border border-border rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] p-2.5 flex items-center justify-between pointer-events-auto">
           {/* Prev Button */}
-          <Link 
+          <Link
             href={prevPatient ? `/dashboard/patient/${prevPatient.patient_id}` : "#"}
             className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all ${prevPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
           >
@@ -565,7 +542,7 @@ export default function PatientDetailPage({ params }) {
                 Diagnosis: {enc.admitting_diagnosis}
               </p>
             </div>
-            
+
             <div className="text-right">
               <div className="flex items-center justify-end gap-2">
                 <span className={`text-[10px] font-black uppercase ${news2.risk_level === 'HIGH' ? 'text-clinical-critical' : 'text-clinical-normal'}`}>
@@ -581,15 +558,15 @@ export default function PatientDetailPage({ params }) {
 
           {/* Next Button */}
           <div className="flex items-center gap-2">
-            <Link 
+            <Link
               href={nextPatient ? `/dashboard/patient/${nextPatient.patient_id}` : "#"}
               className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all ${nextPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
             >
               <span className="text-xl">→</span>
             </Link>
-            
+
             <div className="w-px h-6 bg-border mx-1" />
-            
+
             <Link href="/dashboard" className="w-11 h-11 flex items-center justify-center rounded-xl bg-clinical-info text-white hover:bg-blue-700 transition-all shadow-md">
               <span className="text-lg">⊞</span>
             </Link>
@@ -609,7 +586,7 @@ function ClinicalNotesWidget({ notes }) {
 
   return (
     <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ease-in-out flex flex-col ${minimized ? "w-48 h-10" : "w-80 h-96"}`}>
-      <div 
+      <div
         onClick={() => setMinimized(!minimized)}
         className="bg-clinical-info text-white px-4 py-2.5 rounded-t-xl cursor-pointer flex items-center justify-between shadow-lg"
       >
@@ -619,7 +596,7 @@ function ClinicalNotesWidget({ notes }) {
         </span>
         <span className="text-xs">{minimized ? "▲" : "▼"}</span>
       </div>
-      
+
       {!minimized && (
         <div className="bg-white border-x border-b border-border p-4 rounded-b-xl shadow-2xl flex-1 overflow-y-auto custom-scrollbar backdrop-blur-sm bg-white/95">
           {notes?.length > 0 ? (

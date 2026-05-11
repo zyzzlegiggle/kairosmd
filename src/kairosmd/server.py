@@ -1,11 +1,9 @@
 """KairosMD MCP Server — Multidisciplinary Ward Round Decision Support (MDS).
 
-Connects to FHIR R4 backend for clinical data. Supports dynamic FHIR context
-via X-FHIR-Server-URL / X-FHIR-Access-Token headers (SHARP-on-MCP), falling
-back to configured defaults.
+Connects to FHIR R4 backend for clinical data.
 
 Exposes 8 MCP tools:
-  1. get_ward_round_summary   - Prioritised ward overview
+  1. get_ward_round_summary   - Prioritised ward overview (all 20 patients)
   2. get_patient_ward_detail  - Single-patient deep dive
   3. get_discharge_candidates - Discharge readiness assessment
   4. get_conflict_report      - Cross-source conflict detection
@@ -21,11 +19,6 @@ import asyncio
 from datetime import date
 
 from mcp.server.fastmcp import FastMCP
-try:
-    from mcp.server.fastmcp.server.dependencies import get_http_headers
-except ImportError:
-    # Fallback for different mcp versions
-    get_http_headers = lambda: {}
 
 from kairosmd import config
 from kairosmd.fhir_client import FHIRClient
@@ -39,20 +32,35 @@ from kairosmd.ward_actions import (
 mcp = FastMCP("KairosMD MDS")
 
 def get_fhir_client() -> FHIRClient:
-    """SHARP-on-MCP: Resolve FHIR context from HTTP headers or fallback to config."""
-    try:
-        headers = get_http_headers()
-        url = headers.get("x-fhir-server-url")
-        token = headers.get("x-fhir-access-token")
-        
-        if url:
-            print(f"  [SHARP] Using dynamic context: {url}")
-            return FHIRClient(base_url=url, access_token=token)
-    except Exception:
-        pass
+    """Get FHIR client with SHARP extension support."""
+    headers = mcp.get_http_headers() or {}
     
-    # Fallback to default client
-    return FHIRClient()
+    # SHARP Extension: Standardized Healthcare Agent Remote Protocol
+    # Headers: X-FHIR-Server-URL, X-FHIR-Access-Token, X-Patient-ID, X-FHIR-Context
+    base_url = headers.get("X-FHIR-Server-URL") or headers.get("x-fhir-server-url")
+    token = headers.get("X-FHIR-Access-Token") or headers.get("x-fhir-access-token")
+    context = headers.get("X-FHIR-Context") or headers.get("x-fhir-context")
+    
+    context_bundle = None
+    if context:
+        try:
+            import json as _json
+            context_bundle = _json.loads(context)
+            print(f"  [SHARP] Using provided FHIR context bundle ({len(context_bundle.get('entry', []))} resources)")
+        except Exception as e:
+            print(f"  [SHARP] Failed to parse X-FHIR-Context: {e}")
+
+    return FHIRClient(
+        base_url=base_url, 
+        access_token=token,
+        context_bundle=context_bundle
+    )
+
+
+def get_current_patient_id():
+    """Extract X-Patient-ID for SHARP 'Patient Mode'."""
+    headers = mcp.get_http_headers() or {}
+    return headers.get("X-Patient-ID") or headers.get("x-patient-id")
 
 # Priority sort order for ward round
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -200,7 +208,6 @@ async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
             "llm_briefing": {"data_completeness": "incomplete"},
             "care_team": [
                 {"name": "Dr. Mike", "role": "Lead Consultant (MDS)"},
-                {"name": "Dr. Sarah (Registrar)", "role": "Senior Resident"},
                 {"name": "Dr. Amir (HO)", "role": "Junior Doctor"}
             ]
         }
@@ -212,7 +219,7 @@ async def warm_cache():
     print("\n--- [CACHE] Starting background cache warm-up... ---")
     try:
         client = get_fhir_client()
-        patient_ids = (await _get_ward_patient_ids(client))[:3]
+        patient_ids = await _get_ward_patient_ids(client)
         print(f"--- [CACHE] Warming data for {len(patient_ids)} patients... ---")
         
         for i, pid in enumerate(patient_ids):
@@ -270,15 +277,70 @@ def _sort_ward_list(triage_list: list[dict]) -> list[dict]:
     return sorted(triage_list, key=sort_key)
 
 
+# -- Helper: slim patient projection for multi-patient tools -----------
+def _slim_summary(entry: dict) -> dict:
+    """Project a full patient record to a compact summary.
+
+    Strips out raw vitals/labs arrays, full clinical notes text,
+    FDA data, care team roster, audit trail, and diagnostic reports.
+    Keeps only the clinical bottom-line per patient to minimise
+    LLM input token usage on multi-patient tool calls.
+    """
+    # Compact NEWS2: just score + risk, drop per-parameter breakdown
+    news2_full = entry.get("news2", {})
+    news2_slim = {
+        "total_score": news2_full.get("total_score", 0),
+        "risk_level": news2_full.get("risk_level", "LOW"),
+    }
+
+    # Compact conflicts: type + short description only
+    conflicts_slim = []
+    for c in entry.get("conflicts", []):
+        conflicts_slim.append({
+            "type": c.get("type", ""),
+            "description": c.get("description", "")[:120],
+            "severity": c.get("severity", ""),
+            "acknowledged": c.get("acknowledged", False),
+        })
+
+    # Compact LLM briefing: just the summary string
+    briefing = entry.get("llm_briefing", {})
+    briefing_slim = briefing.get("summary", "") if isinstance(briefing, dict) else str(briefing)[:300]
+
+    # Medication names only (no dosage/code bloat)
+    med_names = [m.get("name", "") for m in entry.get("active_medications", [])]
+
+    # Allergy names only
+    allergy_names = [a.get("name", "") for a in entry.get("allergies", [])]
+
+    return {
+        "patient_id": entry.get("patient_id"),
+        "name": entry.get("name"),
+        "encounter": entry.get("encounter"),
+        "priority": entry.get("priority"),
+        "news2": news2_slim,
+        "conflict_count": entry.get("conflict_count", 0),
+        "conflicts": conflicts_slim,
+        "discharge": entry.get("discharge"),
+        "active_conditions": entry.get("active_conditions", []),
+        "safety_flags": entry.get("safety_flags", []),
+        "medications": med_names,
+        "allergies": allergy_names,
+        "consultant": entry.get("consultant"),
+        "briefing": briefing_slim,
+        "actions": entry.get("actions", []),
+        "escalation_status": entry.get("escalation_status"),
+        "discharge_override": entry.get("discharge_override"),
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/patient/{entry.get('patient_id')}",
+    }
+
+
 # =====================================================================
 # TOOL 1: get_ward_round_summary
 # =====================================================================
 @mcp.tool()
-async def get_ward_round_summary(limit: int = 3) -> str:
-    """Get the morning ward round summary for inpatient patients.
-
-    Args:
-        limit: Maximum number of patients to process (default 5 for fast loading).
+async def get_ward_round_summary() -> str:
+    """Get the morning ward round summary for all inpatient patients.
 
     Returns a prioritised list of patients on the ward with:
     - NEWS2 score and risk level
@@ -290,8 +352,14 @@ async def get_ward_round_summary(limit: int = 3) -> str:
     Sorted by clinical priority (high risk first, discharge ready last).
     """
     client = get_fhir_client()
-    all_patient_ids = await _get_ward_patient_ids(client)
-    patient_ids = all_patient_ids[:limit]
+    
+    # SHARP 'Patient Mode' support
+    sharp_pid = get_current_patient_id()
+    if sharp_pid:
+        print(f"  [SHARP] Patient Mode active: {sharp_pid}")
+        patient_ids = [sharp_pid]
+    else:
+        patient_ids = await _get_ward_patient_ids(client)
 
     if not patient_ids:
         return json.dumps({
@@ -320,23 +388,24 @@ async def get_ward_round_summary(limit: int = 3) -> str:
     # Get ward name from the first patient's encounter info if available
     ward_name = "General Medicine Ward"
     if ward_list:
-        # Check if the first patient has a ward name in their encounter info
-        # The _process_patient tool already extracts this into entry['encounter']['ward']
         ward_name = ward_list[0].get("encounter", {}).get("ward", ward_name)
+
+    # Slim projection: drop raw vitals/labs/notes/FDA to cut token count
+    slim_list = [_slim_summary(p) for p in ward_list]
 
     result = json.dumps({
         "ward": ward_name,
         "date": date.today().isoformat(),
-        "total_patients": len(ward_list),
+        "total_patients": len(slim_list),
         "high_risk_count": high_risk,
         "medium_risk_count": medium_risk,
         "active_conflicts": conflicts_total,
         "discharge_candidates": discharge_ready,
-        "patients": ward_list,
+        "patients": slim_list,
         "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
-    }, indent=2)
+    })
 
-    print(f"\n--- [LOG] Ward Round Summary: {len(ward_list)} patients ---")
+    print(f"\n--- [LOG] Ward Round Summary: {len(slim_list)} patients ---")
     return result
 
 
@@ -357,7 +426,7 @@ async def get_patient_ward_detail(patient_id: str) -> str:
     entry = await _process_patient(patient_id, client)
     entry["dashboard_url"] = f"{config.DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}"
 
-    result = json.dumps(entry, indent=2)
+    result = json.dumps(entry)
     print(f"\n--- [LOG] Patient Detail: {entry.get('name', 'Unknown')} ---")
     return result
 
@@ -366,18 +435,20 @@ async def get_patient_ward_detail(patient_id: str) -> str:
 # TOOL 3: get_discharge_candidates
 # =====================================================================
 @mcp.tool()
-async def get_discharge_candidates(limit: int = 3) -> str:
+async def get_discharge_candidates() -> str:
     """Get patients who are ready or near-ready for discharge.
-
-    Args:
-        limit: Maximum number of patients to check (default 3).
 
     Returns patients flagged as 'Ready' or 'Requires Review',
     sorted by length of stay (longest first).
     """
     client = get_fhir_client()
-    all_patient_ids = await _get_ward_patient_ids(client)
-    patient_ids = all_patient_ids[:limit]
+    
+    # SHARP 'Patient Mode' support
+    sharp_pid = get_current_patient_id()
+    if sharp_pid:
+        patient_ids = [sharp_pid]
+    else:
+        patient_ids = await _get_ward_patient_ids(client)
 
     candidates = []
     for i, pid in enumerate(patient_ids):
@@ -394,14 +465,17 @@ async def get_discharge_candidates(limit: int = 3) -> str:
         reverse=True
     )
 
+    # Slim projection to reduce token payload
+    slim_candidates = [_slim_summary(c) for c in candidates]
+
     result = json.dumps({
         "date": date.today().isoformat(),
-        "candidate_count": len(candidates),
-        "candidates": candidates,
+        "candidate_count": len(slim_candidates),
+        "candidates": slim_candidates,
         "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge",
-    }, indent=2)
+    })
 
-    print(f"\n--- [LOG] Discharge Candidates: {len(candidates)} ---")
+    print(f"\n--- [LOG] Discharge Candidates: {len(slim_candidates)} ---")
     return result
 
 
@@ -409,19 +483,21 @@ async def get_discharge_candidates(limit: int = 3) -> str:
 # TOOL 4: get_conflict_report
 # =====================================================================
 @mcp.tool()
-async def get_conflict_report(limit: int = 3) -> str:
+async def get_conflict_report() -> str:
     """Get all detected clinical conflicts across the ward.
-
-    Args:
-        limit: Maximum number of patients to check (default 3).
 
     Returns patients with active conflicts sorted by severity.
     Includes allergy-medication conflicts, drug interactions,
     missed doses, and note-vs-data contradictions.
     """
     client = get_fhir_client()
-    all_patient_ids = await _get_ward_patient_ids(client)
-    patient_ids = all_patient_ids[:limit]
+    
+    # SHARP 'Patient Mode' support
+    sharp_pid = get_current_patient_id()
+    if sharp_pid:
+        patient_ids = [sharp_pid]
+    else:
+        patient_ids = await _get_ward_patient_ids(client)
 
     conflict_patients = []
     for i, pid in enumerate(patient_ids):
@@ -439,13 +515,16 @@ async def get_conflict_report(limit: int = 3) -> str:
 
     total_conflicts = sum(p.get("conflict_count", 0) for p in conflict_patients)
 
+    # Slim projection to reduce token payload
+    slim_conflict = [_slim_summary(p) for p in conflict_patients]
+
     result = json.dumps({
         "date": date.today().isoformat(),
-        "patients_with_conflicts": len(conflict_patients),
+        "patients_with_conflicts": len(slim_conflict),
         "total_conflicts": total_conflicts,
-        "patients": conflict_patients,
+        "patients": slim_conflict,
         "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts",
-    }, indent=2)
+    })
 
     print(f"\n--- [LOG] Conflict Report: {total_conflicts} conflicts ---")
     return result
@@ -456,8 +535,8 @@ async def get_conflict_report(limit: int = 3) -> str:
 # =====================================================================
 @mcp.tool()
 async def record_ward_action(
-    patient_id: str,
     action_type: str,
+    patient_id: str | None = None,
     detail: str = "",
     conflict_id: str = "",
     clinician: str = "Dr. Mike",
@@ -481,6 +560,13 @@ async def record_ward_action(
         conflict_id: If acknowledging a specific conflict, its ID.
         clinician: Name of the acting clinician.
     """
+    # SHARP 'Patient Mode' support
+    if not patient_id:
+        patient_id = get_current_patient_id()
+        
+    if not patient_id:
+        return "Error: No patient ID provided and no SHARP 'Patient Mode' detected."
+
     action = record_action(
         patient_id=patient_id,
         action_type=action_type,
@@ -616,16 +702,25 @@ async def get_drug_safety_info(drug_name: str, check_interaction_with: str = "")
 # =====================================================================
 @mcp.tool()
 async def get_dashboard_access() -> str:
-    """Get direct links to the visual clinical dashboards.
+    """Get direct links to the Multidisciplinary Dashboard views."""
+    sharp_pid = get_current_patient_id()
+    
+    links = [
+        {"name": "Ward Summary Board", "url": f"{config.DASHBOARD_BASE_URL}/dashboard"},
+        {"name": "Discharge Planning Board", "url": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge"},
+        {"name": "Clinical Conflict Board", "url": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts"},
+    ]
+    
+    if sharp_pid:
+        links.append({
+            "name": f"Current Patient Detail ({sharp_pid})", 
+            "url": f"{config.DASHBOARD_BASE_URL}/dashboard/patient/{sharp_pid}"
+        })
 
-    Use this when the user specifically asks to 'open the dashboard',
-    'show me the board', or 'give me the full view'.
-    """
     return json.dumps({
-        "main_ward_board": f"{config.DASHBOARD_BASE_URL}/dashboard",
-        "discharge_planning_board": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge",
-        "clinical_conflict_board": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts",
-        "message": "Click the links above to open the high-fidelity visual clinical interface."
+        "status": "success",
+        "message": "Dashboard links generated.",
+        "links": links
     }, indent=2)
 
 
