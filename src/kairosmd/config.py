@@ -14,4 +14,4 @@ LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
 LLM_MODEL: str = os.getenv("LLM_MODEL", "nemotron-3-super-120b")
 
 # -- Defaults ----------------------------------------------------------
-DEFAULT_PRACTITIONER_ID: str = os.getenv("DEFAULT_PRACTITIONER_ID", "")
+DASHBOARD_BASE_URL: str = os.getenv("DASHBOARD_BASE_URL", "http://localhost:3000")

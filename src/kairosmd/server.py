@@ -29,10 +29,6 @@ from kairosmd.ward_actions import (
 mcp = FastMCP("KairosMD MDS")
 fhir = FHIRClient()
 
-# Default practitioner ID (Dr. Mike)
-DEFAULT_PRACTITIONER_ID = "dr-mike"
-DASHBOARD_BASE_URL = "http://localhost:3000"
-
 # Priority sort order for ward round
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
@@ -180,7 +176,7 @@ async def warm_cache():
     """Pre-fetch all patient data on startup so the first request is instant."""
     print("\n--- [CACHE] Starting background cache warm-up... ---")
     try:
-        patient_ids = (await _get_ward_patient_ids(fhir))[:20]
+        patient_ids = (await _get_ward_patient_ids(fhir))[:3]
         print(f"--- [CACHE] Warming data for {len(patient_ids)} patients... ---")
         
         for i, pid in enumerate(patient_ids):
@@ -242,7 +238,7 @@ def _sort_ward_list(triage_list: list[dict]) -> list[dict]:
 # TOOL 1: get_ward_round_summary
 # =====================================================================
 @mcp.tool()
-async def get_ward_round_summary(limit: int = 20) -> str:
+async def get_ward_round_summary(limit: int = 3) -> str:
     """Get the morning ward round summary for inpatient patients.
 
     Args:
@@ -263,7 +259,7 @@ async def get_ward_round_summary(limit: int = 20) -> str:
     if not patient_ids:
         return json.dumps({
             "error": "No active inpatient encounters found",
-            "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard",
+            "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
         })
 
     # Process patients sequentially with rate limiting
@@ -284,8 +280,15 @@ async def get_ward_round_summary(limit: int = 20) -> str:
     discharge_ready = sum(1 for p in ward_list
                           if p.get("discharge", {}).get("status") == "Ready")
 
+    # Get ward name from the first patient's encounter info if available
+    ward_name = "General Medicine Ward"
+    if ward_list:
+        # Check if the first patient has a ward name in their encounter info
+        # The _process_patient tool already extracts this into entry['encounter']['ward']
+        ward_name = ward_list[0].get("encounter", {}).get("ward", ward_name)
+
     result = json.dumps({
-        "ward": "General Medicine Ward 4",
+        "ward": ward_name,
         "date": date.today().isoformat(),
         "total_patients": len(ward_list),
         "high_risk_count": high_risk,
@@ -293,7 +296,7 @@ async def get_ward_round_summary(limit: int = 20) -> str:
         "active_conflicts": conflicts_total,
         "discharge_candidates": discharge_ready,
         "patients": ward_list,
-        "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard",
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
     }, indent=2)
 
     print(f"\n--- [LOG] Ward Round Summary: {len(ward_list)} patients ---")
@@ -314,7 +317,7 @@ async def get_patient_ward_detail(patient_id: str) -> str:
     notes, NEWS2 score, conflicts, discharge readiness, and AI briefing.
     """
     entry = await _process_patient(patient_id, fhir)
-    entry["dashboard_url"] = f"{DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}"
+    entry["dashboard_url"] = f"{config.DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}"
 
     result = json.dumps(entry, indent=2)
     print(f"\n--- [LOG] Patient Detail: {entry.get('name', 'Unknown')} ---")
@@ -352,7 +355,7 @@ async def get_discharge_candidates() -> str:
         "date": date.today().isoformat(),
         "candidate_count": len(candidates),
         "candidates": candidates,
-        "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard/discharge",
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge",
     }, indent=2)
 
     print(f"\n--- [LOG] Discharge Candidates: {len(candidates)} ---")
@@ -393,7 +396,7 @@ async def get_conflict_report() -> str:
         "patients_with_conflicts": len(conflict_patients),
         "total_conflicts": total_conflicts,
         "patients": conflict_patients,
-        "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard/conflicts",
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts",
     }, indent=2)
 
     print(f"\n--- [LOG] Conflict Report: {total_conflicts} conflicts ---")
@@ -490,7 +493,7 @@ async def get_action_history(patient_id: str) -> str:
         "patient_id": patient_id,
         "action_count": len(actions),
         "history": actions,
-        "dashboard_url": f"{DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}#timeline",
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}#timeline",
     }, indent=2)
 
     print(f"\n--- [LOG] History requested for {patient_id}: {len(actions)} entries ---")

@@ -119,10 +119,11 @@ export default function PatientDetailPage({ params }) {
 
   const act = async (type, detail = "", conflictId = "") => {
     setActionLoading(true);
+    const clinician = (typeof window !== 'undefined' ? localStorage.getItem("clinician_name") : "Dr. Mike") || "Dr. Mike";
     try {
       await callMCPTool("record_ward_action", {
         patient_id: id, action_type: type, detail,
-        conflict_id: conflictId, clinician: "Dr. Mike",
+        conflict_id: conflictId, clinician: clinician,
       });
       invalidatePatientCache(id);
       setToast(`Recorded: ${type.replace(/_/g, " ")}`);

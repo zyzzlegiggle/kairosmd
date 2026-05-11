@@ -91,16 +91,43 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Clinician info */}
-      <div className="px-4 py-4 border-t border-white/10">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-clinical-info flex items-center justify-center text-xs font-bold text-white">
-            DM
-          </div>
-          <div>
-            <p className="text-xs font-bold text-white">Dr. Mike</p>
-            <p className="text-[10px] text-sidebar-text">Consultant</p>
-          </div>
+      {/* Clinician Identity Switcher */}
+      <div className="px-4 py-4 border-t border-white/10 bg-black/10">
+        <div className="mb-3">
+          <p className="text-[10px] text-sidebar-text font-bold uppercase tracking-widest opacity-60">Acting Clinician</p>
+        </div>
+        <div className="space-y-2">
+          {[
+            { name: "Dr. Mike", role: "Consultant", initial: "DM" },
+            { name: "Dr. Sarah", role: "Registrar", initial: "DS" }
+          ].map((doc) => {
+            const isSelected = (typeof window !== 'undefined' ? localStorage.getItem("clinician_name") : "Dr. Mike") === doc.name || (!localStorage.getItem("clinician_name") && doc.name === "Dr. Mike");
+            
+            return (
+              <button
+                key={doc.name}
+                onClick={() => {
+                  localStorage.setItem("clinician_name", doc.name);
+                  localStorage.setItem("clinician_role", doc.role);
+                  window.location.reload(); // Quick way to sync state across all components
+                }}
+                className={`w-full flex items-center gap-3 p-2 rounded-lg transition-all text-left ${
+                  isSelected ? "bg-white/10 ring-1 ring-white/20" : "hover:bg-white/5 opacity-50"
+                }`}
+              >
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${
+                  isSelected ? "bg-clinical-info" : "bg-sidebar-text/20"
+                }`}>
+                  {doc.initial}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white truncate">{doc.name}</p>
+                  <p className="text-[9px] text-sidebar-text truncate">{doc.role}</p>
+                </div>
+                {isSelected && <div className="ml-auto w-1.5 h-1.5 rounded-full bg-clinical-info" />}
+              </button>
+            );
+          })}
         </div>
       </div>
     </aside>

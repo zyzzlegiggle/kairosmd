@@ -193,9 +193,17 @@ export default function DashboardPage() {
   const highPriorityAlerts = allConflicts.filter(c => c.severity === "HIGH");
 
   return (
-    <div>
+    <div className="space-y-8">
+      {/* Ward Header */}
+      <div className="flex items-end justify-between">
+        <div>
+          <h2 className="text-2xl font-black text-text-primary tracking-tight">{data.ward || "General Medicine Ward"}</h2>
+          <p className="text-[10px] font-bold text-clinical-info uppercase tracking-[0.2em] mt-1">Live Ward View • {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
+        </div>
+      </div>
+
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-5 mb-8">
+      <div className="grid grid-cols-4 gap-5">
         <StatCard label="Total Census" value={data.total_patients} />
         <StatCard label="High Acuity" value={data.high_risk_count} variant={data.high_risk_count > 0 ? "critical" : "default"} />
         <StatCard label="Active Alerts" value={data.active_conflicts} variant={data.active_conflicts > 0 ? "warning" : "default"} />
@@ -204,7 +212,7 @@ export default function DashboardPage() {
 
       {/* Ward Alerts Section */}
       {highPriorityAlerts.length > 0 && (
-        <div className="mb-8 bg-white rounded-xl border border-clinical-critical-border overflow-hidden">
+        <div className="bg-white rounded-xl border border-clinical-critical-border overflow-hidden">
           <div className="px-6 py-3 bg-clinical-critical-bg border-b border-clinical-critical-border flex items-center justify-between">
             <h3 className="text-xs font-bold text-clinical-critical uppercase tracking-wider">Critical Ward Alerts</h3>
             <span className="text-[10px] font-bold px-2 py-0.5 bg-clinical-critical text-white rounded-full">
