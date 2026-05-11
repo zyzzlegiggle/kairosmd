@@ -1,10 +1,10 @@
 "use client";
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
-import { callMCPTool, invalidatePatientCache } from "@/lib/mcp";
+import { callMCPTool, invalidatePatientCache } from "../../../../lib/mcp";
 import dynamic from "next/dynamic";
 
-const VitalChart = dynamic(() => import("@/components/VitalChart"), { ssr: false });
+const VitalChart = dynamic(() => import("../../../../components/VitalChart"), { ssr: false });
 
 /* ── Tiny helpers ─────────────────────────────────────────────── */
 
