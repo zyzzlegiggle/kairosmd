@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { callMCPTool } from "../lib/mcp.js";
+import { callMCPTool } from "@/lib/mcp";
 
 function NavLink({ href, label, icon, active = false }) {
   return (
