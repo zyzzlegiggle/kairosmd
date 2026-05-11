@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { callMCPTool } from "../lib/mcp";
+import { callMCPTool } from "../lib/mcp.js";
 
 function NavLink({ href, label, icon, active = false }) {
   return (
@@ -43,9 +43,12 @@ export default function Sidebar() {
     <aside className="w-60 bg-sidebar border-r border-white/10 flex flex-col fixed inset-y-0 left-0 z-20">
       {/* Brand */}
       <div className="px-6 py-8">
-        <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-          <span className="text-clinical-info">Kairos</span>MD
-        </h1>
+        <div className="flex items-center gap-3 mb-1">
+          <img src="/logo.png" alt="KairosMD Logo" className="w-8 h-8 rounded-lg shadow-lg ring-1 ring-white/20" />
+          <h1 className="text-xl font-bold text-white tracking-tight">
+            <span className="text-clinical-info">Kairos</span>MD
+          </h1>
+        </div>
         <p className="text-[10px] text-sidebar-text font-semibold uppercase tracking-widest mt-1 opacity-60">Ward Support System</p>
       </div>
 

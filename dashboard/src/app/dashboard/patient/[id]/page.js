@@ -1,10 +1,10 @@
 "use client";
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
-import { callMCPTool, invalidatePatientCache } from "../../../../lib/mcp";
+import { callMCPTool, invalidatePatientCache } from "../../../../lib/mcp.js";
 import dynamic from "next/dynamic";
 
-const VitalChart = dynamic(() => import("../../../../components/VitalChart"), { ssr: false });
+const VitalChart = dynamic(() => import("../../../../components/VitalChart.js"), { ssr: false });
 
 /* ── Tiny helpers ─────────────────────────────────────────────── */
 
@@ -68,6 +68,8 @@ export default function PatientDetailPage({ params }) {
   const { id } = use(params);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("Synchronizing FHIR Clinical Record...");
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast] = useState("");
   const [noteInput, setNoteInput] = useState("");
@@ -105,6 +107,8 @@ export default function PatientDetailPage({ params }) {
   const fetchData = async (isInitial = false) => {
     if (isInitial) setLoading(true);
     else setRefreshing(true);
+    setSyncMessage("Synchronizing FHIR Clinical Record...");
+    setSyncing(true);
     try {
       const result = await callMCPTool("get_patient_ward_detail", { patient_id: id });
       setData(result);
@@ -113,12 +117,15 @@ export default function PatientDetailPage({ params }) {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      setSyncing(false);
     }
   };
 
   useEffect(() => { fetchData(true); }, [id]);
 
   const act = async (type, detail = "", conflictId = "") => {
+    setSyncMessage("Propagating Entry to FHIR Server...");
+    setSyncing(true);
     setActionLoading(true);
     const clinician = (typeof window !== 'undefined' ? localStorage.getItem("clinician_name") : "Dr. Mike") || "Dr. Mike";
     try {
@@ -133,10 +140,31 @@ export default function PatientDetailPage({ params }) {
       setToast(`Error: ${e.message}`);
     } finally {
       setActionLoading(false);
+      setSyncing(false);
     }
   };
 
-  if (loading) return <LoadingSkeleton />;
+  if (loading && !data) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background relative overflow-hidden">
+        {/* Technical Syncing Pill */}
+        <div className="fixed top-12 left-1/2 -translate-x-1/2 z-[100] animate-bounce">
+          <div className="bg-clinical-info text-white px-6 py-3 rounded-full shadow-[0_20px_50px_rgba(37,99,235,0.4)] flex items-center gap-4 border border-white/20 backdrop-blur-md bg-blue-600/90">
+            <div className="flex gap-1">
+              <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+              <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse delay-75" />
+              <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse delay-150" />
+            </div>
+            <span className="text-xs font-black uppercase tracking-[0.2em]">Synchronizing FHIR Clinical Engine</span>
+          </div>
+        </div>
+        
+        <div className="flex flex-col items-center gap-6 opacity-20">
+          <div className="w-24 h-24 border-8 border-clinical-info border-t-transparent rounded-full animate-spin" />
+        </div>
+      </div>
+    );
+  }
   if (!data) return <p className="text-text-tertiary text-sm p-8">Patient not found.</p>;
 
   const briefing = data.llm_briefing || {};
@@ -169,7 +197,18 @@ export default function PatientDetailPage({ params }) {
   const riskColor = news2.risk_level === "HIGH" ? "critical" : news2.risk_level === "MEDIUM" ? "warning" : "success";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5 relative">
+      {/* Background Syncing Pill */}
+      <div className={`fixed top-6 left-[calc(50%+120px)] -translate-x-1/2 z-[100] transition-all duration-500 ease-in-out ${syncing ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4 pointer-events-none"}`}>
+        <div className="bg-clinical-info text-white px-6 py-2 rounded-full shadow-[0_20px_50px_rgba(37,99,235,0.4)] flex items-center gap-3 border border-white/20 backdrop-blur-md bg-blue-600/90">
+          <div className="flex gap-1">
+            <div className="w-1.5 h-1.5 bg-white rounded-full animate-bounce" />
+            <div className="w-1.5 h-1.5 bg-white rounded-full animate-bounce delay-100" />
+            <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse delay-200" />
+          </div>
+          <span className="text-[10px] font-black uppercase tracking-widest text-white/90">{syncMessage}</span>
+        </div>
+      </div>
 
       {/* ══════════════════════════════════════════════════════════
           HEADER — Patient identity + quick actions
@@ -488,58 +527,58 @@ export default function PatientDetailPage({ params }) {
       {/* ══════════════════════════════════════════════════════════
           STICKY NAVIGATOR — Bottom Center (White Theme)
          ══════════════════════════════════════════════════════════ */}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-72 pointer-events-none">
-        <div className="bg-white border border-border rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.25)] p-5 flex flex-col gap-5 pointer-events-auto backdrop-blur-xl bg-white/95">
-          {/* Navigation Row */}
-          <div className="flex items-center justify-between">
-            <Link
-              href={prevPatient ? `/dashboard/patient/${prevPatient.patient_id}` : "#"}
-              className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-all shadow-sm ${prevPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
-            >
-              <span className="text-xl">←</span>
-            </Link>
+      <div className="fixed bottom-4 left-[58%] -translate-x-1/2 z-40 w-[580px] pointer-events-none">
+        <div className="bg-white border border-border rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.2)] p-3 flex items-center justify-between pointer-events-auto backdrop-blur-xl bg-white/95">
+          {/* Prev Button */}
+          <Link
+            href={prevPatient ? `/dashboard/patient/${prevPatient.patient_id}` : "#"}
+            className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all shadow-sm ${prevPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
+          >
+            <span className="text-xl">←</span>
+          </Link>
 
-            <div className="flex flex-col items-center">
-              <span className="text-[10px] font-black bg-text-primary text-white px-3 py-1 rounded-full uppercase mb-1 shadow-sm">
-                {enc.bed?.startsWith('Bed') ? enc.bed : `Bed ${enc.bed}`}
-              </span>
-              <span className="text-[8px] font-black text-text-tertiary tracking-widest">
-                {currentIdx + 1} / {wardList.length}
-              </span>
+          {/* Expanded Horizontal Context */}
+          <div className="flex-1 px-4 flex items-center justify-between gap-2">
+            <div className="text-left flex-1 min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[9px] font-black bg-text-primary text-white px-1.5 py-0.5 rounded uppercase shadow-sm shrink-0">
+                  {enc.bed?.startsWith('Bed') ? enc.bed : `Bed ${enc.bed}`}
+                </span>
+                <h4 className="text-xs font-black text-text-primary truncate">{data.name}</h4>
+              </div>
+              <p className="text-[9px] font-bold text-text-tertiary uppercase tracking-tight mt-0.5 truncate">
+                {enc.admitting_diagnosis}
+              </p>
             </div>
 
-            <Link
-              href={nextPatient ? `/dashboard/patient/${nextPatient.patient_id}` : "#"}
-              className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-all shadow-sm ${nextPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
-            >
-              <span className="text-xl">→</span>
-            </Link>
-          </div>
+            <div className="h-6 w-px bg-border-light mx-1" />
 
-          {/* Patient Context Block */}
-          <div className="text-center px-2">
-            <h4 className="text-base font-black text-text-primary tracking-tight leading-tight">{data.name}</h4>
-            <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-normal mt-1 line-clamp-1">
-              {enc.admitting_diagnosis}
-            </p>
-          </div>
-
-          {/* Stats Divider (The "Longer" part) */}
-          <div className="grid grid-cols-2 gap-4 py-3 border-y border-border-light">
-            <div className="text-center">
-              <p className="text-[8px] font-black text-text-tertiary uppercase tracking-widest mb-0.5">Stay</p>
-              <p className="text-[10px] font-bold text-text-primary">Day {enc.length_of_stay}</p>
+            <div className="text-center px-1 max-w-[100px]">
+              <p className="text-[7px] font-black text-text-tertiary uppercase tracking-widest mb-0.5">Lead</p>
+              <p className="text-[10px] font-bold text-text-primary truncate">{data.consultant}</p>
             </div>
-            <div className="text-center">
-              <p className="text-[8px] font-black text-text-tertiary uppercase tracking-widest mb-0.5">Lead</p>
-              <p className="text-[10px] font-bold text-text-primary truncate">{data.consultant?.split(' ').pop()}</p>
+
+            <div className="h-6 w-px bg-border-light mx-1" />
+
+            <div className="text-right shrink-0">
+              <div className="flex items-center justify-end gap-2 mb-0.5">
+                <span className={`text-[10px] font-black uppercase ${news2.risk_level === 'HIGH' ? 'text-clinical-critical' : 'text-clinical-normal'}`}>
+                  NEWS2 {news2.total_score}
+                </span>
+                <span className="text-[9px] font-bold text-text-tertiary">D{enc.length_of_stay}</span>
+              </div>
+              <p className="text-[8px] font-black text-text-tertiary tracking-widest">
+                {currentIdx + 1}/{wardList.length} PATIENTS
+              </p>
             </div>
           </div>
 
-          {/* Action Row */}
-          <Link href="/dashboard" className="w-full py-3 bg-clinical-info text-white rounded-2xl flex items-center justify-center gap-3 hover:bg-blue-700 transition-all shadow-[0_4px_15px_rgba(37,99,235,0.3)] group">
-            <span className="text-lg group-hover:scale-110 transition-transform">⊞</span>
-            <span className="text-[10px] font-black uppercase tracking-wider">Dashboard</span>
+          {/* Next Button */}
+          <Link
+            href={nextPatient ? `/dashboard/patient/${nextPatient.patient_id}` : "#"}
+            className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all shadow-sm ${nextPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
+          >
+            <span className="text-xl">→</span>
           </Link>
         </div>
       </div>
@@ -555,7 +594,7 @@ function ClinicalNotesWidget({ notes }) {
   const [minimized, setMinimized] = useState(true);
 
   return (
-    <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ease-in-out flex flex-col ${minimized ? "w-48 h-11" : "w-80 h-96"}`}>
+    <div className={`fixed bottom-4 right-6 z-50 transition-all duration-300 ease-in-out flex flex-col ${minimized ? "w-56 h-11" : "w-96 h-96"}`}>
       <div
         onClick={() => setMinimized(!minimized)}
         className={`bg-clinical-info text-white px-4 py-2.5 cursor-pointer flex items-center justify-between shadow-[0_10px_30px_rgba(59,130,246,0.3)] transition-all hover:scale-[1.02] active:scale-[0.98] ${minimized ? "rounded-xl" : "rounded-t-xl"}`}
@@ -602,7 +641,7 @@ function SafetyAlertsWidget({ alerts, flags, onAck, actionLoading }) {
   if (totalCount === 0) return null;
 
   return (
-    <div className={`fixed bottom-6 left-[280px] z-50 transition-all duration-300 ease-in-out flex flex-col ${minimized ? "w-48 h-11" : "w-80 h-96"}`}>
+    <div className={`fixed bottom-4 left-[260px] z-50 transition-all duration-300 ease-in-out flex flex-col ${minimized ? "w-56 h-11" : "w-96 h-96"}`}>
       <div
         onClick={() => setMinimized(!minimized)}
         className={`bg-clinical-critical text-white px-4 py-2.5 cursor-pointer flex items-center justify-between shadow-[0_10px_30px_rgba(239,68,68,0.3)] transition-all hover:scale-[1.02] active:scale-[0.98] ${minimized ? "rounded-xl" : "rounded-t-xl"}`}
