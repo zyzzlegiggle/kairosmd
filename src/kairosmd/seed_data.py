@@ -125,7 +125,7 @@ SCENARIOS = [
             {"name": "Gentamicin", "code": "4733", "dosage": "320mg IV OD", "status": "active"},
             {"name": "Amoxicillin", "code": "723", "dosage": "1g IV TDS", "status": "active"},
         ],
-        "allergies": [{"code": "29633", "name": "Codeine", "criticality": "medium"}],
+        "allergies": [{"code": "29633", "name": "Codeine", "criticality": "low"}],
         "flags": [{"code": "ISOLATION", "detail": "Contact Precautions"}],
     },
 
@@ -214,7 +214,7 @@ SCENARIOS = [
             "junior": "BP 170/95. Fundoscopy: Clear. Continue slow reduction.",
         },
         "meds": [{"name": "Labetalol", "code": "6185", "dosage": "20mg IV", "status": "active"}],
-        "allergies": [{"code": "70618", "name": "Penicillin", "criticality": "medium"}],
+        "allergies": [{"code": "70618", "name": "Penicillin", "criticality": "low"}],
         "flags": [{"code": "RESUS", "detail": "Full Resuscitation"}],
     },
 
@@ -232,7 +232,7 @@ SCENARIOS = [
             {"name": "Aspirin", "code": "1191", "dosage": "75mg OD PO", "status": "active"},
             {"name": "Clopidogrel", "code": "32968", "dosage": "75mg OD PO", "status": "active"},
         ],
-        "allergies": [{"code": "6185", "name": "Labetalol", "criticality": "medium"}],
+        "allergies": [{"code": "6185", "name": "Labetalol", "criticality": "low"}],
         "flags": [{"code": "DIET", "detail": "Thickened Fluids Only"}],
     },
 
@@ -263,7 +263,7 @@ SCENARIOS = [
             "nursing_afternoon": "14:00: Pain well controlled. Tolerating sips of water.",
         },
         "meds": [{"name": "Morphine", "code": "7052", "dosage": "10mg PRN", "status": "active"}],
-        "allergies": [{"code": "29633", "name": "Codeine", "criticality": "medium"}],
+        "allergies": [{"code": "29633", "name": "Codeine", "criticality": "low"}],
         "flags": [{"code": "NBM", "detail": "Strict NBM"}],
     },
 
@@ -274,8 +274,8 @@ SCENARIOS = [
                     "condition": "CAP (Improving)", "consultant": CONSULTANTS[1], "day": 6},
         "vitals_trend": "improving",
         "notes": {
-            "consultant": "Day 5: Clinically well. SpO2 98% RA. Home today. Discharge meds requested.",
-            "junior": "Discharge script written. Waiting for pharmacy.",
+            "consultant": "Day 5: Clinically well. SpO2 98% RA. Home today. Medically fit for discharge.",
+            "junior": "Discharge script written. Mobility stable. Waiting for pharmacy.",
         },
         "meds": [{"name": "Amoxicillin", "code": "723", "dosage": "500mg TDS PO", "status": "active"}],
         "allergies": [{"code": "29633", "name": "Codeine", "criticality": "low"}],
@@ -300,7 +300,7 @@ SCENARIOS = [
             {"name": "Ramipril", "code": "35296", "dosage": "10mg OD PO", "status": "active"},
             {"name": "Calcium Resonium", "code": "203253", "dosage": "15g TDS PO", "status": "active"},
         ],
-        "allergies": [{"code": "1191", "name": "Aspirin", "criticality": "medium"}],
+        "allergies": [{"code": "1191", "name": "Aspirin", "criticality": "low"}],
         "flags": [{"code": "DIET", "detail": "Low Potassium Diet"}],
     },
 
@@ -311,8 +311,8 @@ SCENARIOS = [
                     "condition": "DVT Left Leg", "consultant": CONSULTANTS[0], "day": 3},
         "vitals_trend": "improving",
         "notes": {
-            "consultant": "Day 2: USS confirmed DVT. Therapeutic LMWH. Bridging to Rivaroxaban. Discharge when INR therapeutic.",
-            "junior": "Switched to Rivaroxaban 15mg BD. Discharge plan in place. OPD follow-up booked.",
+            "consultant": "Day 2: USS confirmed DVT. Therapeutic LMWH. Bridging to Rivaroxaban. Package of care confirmed for home.",
+            "junior": "Switched to Rivaroxaban 15mg BD. Mobility stable. OPD follow-up booked.",
         },
         "meds": [{"name": "Rivaroxaban", "code": "1114195", "dosage": "15mg BD PO", "status": "active"}],
         "allergies": [],

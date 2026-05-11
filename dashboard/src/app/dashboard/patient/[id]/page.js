@@ -8,7 +8,7 @@ const VitalChart = dynamic(() => import("@/components/VitalChart"), { ssr: false
 
 /* ── Tiny helpers ─────────────────────────────────────────────── */
 
-function Card({ title, children, className = "", accent = "", headerRight = null }) {
+function Card({ title, children, className = "", accent = "", headerRight = null, footer = null }) {
   return (
     <div className={`bg-white rounded-xl border border-border ${className}`}>
       {title && (
@@ -18,6 +18,7 @@ function Card({ title, children, className = "", accent = "", headerRight = null
         </div>
       )}
       <div className="px-5 py-4">{children}</div>
+      {footer && <div className="px-5 pb-3">{footer}</div>}
     </div>
   );
 }
@@ -142,67 +143,41 @@ export default function PatientDetailPage({ params }) {
   const news2     = data.news2 || {};
   const enc       = data.encounter || {};
   const discharge = data.discharge || {};
-  const alerts    = data.conflicts || [];
-  const flags     = data.safety_flags || [];
+  
+  // ── DEDUPLICATION LOGIC ──
+  // 1. Conflicts
+  const rawAlerts = data.conflicts || [];
+  const alerts    = [...new Map(rawAlerts.map(a => [a.message, a])).values()];
+  
+  // 2. Safety Flags
+  const rawFlags  = data.safety_flags || [];
+  const flags     = [...new Set(rawFlags)];
+  
+  // 3. Clinical Notes
+  const rawNotes  = data.clinical_notes || [];
+  const clinicalNotes = [...new Map(rawNotes.map(n => [`${n.date}-${n.text.slice(0,50)}`, n])).values()];
+  
+  // 4. Medications
+  const rawMeds   = data.active_medications || [];
+  const activeMeds = [...new Map(rawMeds.map(m => [m.name || m.medication, m])).values()];
+  
   const hasAlerts = alerts.length > 0 || flags.length > 0;
 
   const riskColor = news2.risk_level === "HIGH" ? "critical" : news2.risk_level === "MEDIUM" ? "warning" : "success";
 
   return (
     <div className="space-y-5">
-      {/* ── Navigation Bar ── */}
-      <div className="flex items-center justify-between">
-        <Link href="/dashboard" className="text-xs text-text-tertiary hover:text-clinical-info transition-colors inline-flex items-center gap-1">
-          ← Ward Board
-        </Link>
-        <div className="flex items-center gap-2">
-          {prevPatient ? (
-            <Link href={`/dashboard/patient/${prevPatient.patient_id}`}
-              className="text-[10px] font-bold text-text-tertiary hover:text-clinical-info transition-colors px-2.5 py-1 rounded-md border border-border hover:border-clinical-info/30 inline-flex items-center gap-1.5">
-              ← <span className="hidden sm:inline">Bed {prevPatient.encounter?.bed}</span><span className="sm:hidden">Prev</span>
-              <kbd className="text-[8px] bg-surface-secondary px-1 rounded opacity-50">K</kbd>
-            </Link>
-          ) : <span className="w-20" />}
-          {wardList.length > 0 && (
-            <span className="text-[9px] text-text-tertiary tabular-nums font-medium">
-              {currentIdx + 1} / {wardList.length}
-            </span>
-          )}
-          {nextPatient ? (
-            <Link href={`/dashboard/patient/${nextPatient.patient_id}`}
-              className="text-[10px] font-bold text-text-tertiary hover:text-clinical-info transition-colors px-2.5 py-1 rounded-md border border-border hover:border-clinical-info/30 inline-flex items-center gap-1.5">
-              <span className="hidden sm:inline">Bed {nextPatient.encounter?.bed}</span><span className="sm:hidden">Next</span> →
-              <kbd className="text-[8px] bg-surface-secondary px-1 rounded opacity-50">J</kbd>
-            </Link>
-          ) : <span className="w-20" />}
-        </div>
-      </div>
 
       {/* ══════════════════════════════════════════════════════════
           HEADER — Patient identity + quick actions
          ══════════════════════════════════════════════════════════ */}
-      <div className="bg-white rounded-xl border border-border p-5">
-        <div className="flex items-start justify-between">
+      <div className="bg-white rounded-xl border border-border p-6">
+        <div className="flex items-start justify-between mb-6">
           <div>
-            <div className="flex items-center gap-3">
-              <h2 className="text-lg font-bold text-text-primary">{data.name}</h2>
+            <h2 className="text-2xl font-black text-text-primary tracking-tight">{data.name}</h2>
+            <div className="flex items-center gap-2 mt-1">
               <Badge variant={riskColor}>NEWS2 {news2.total_score ?? "--"}</Badge>
-              {hasAlerts && <Badge variant="critical">{alerts.filter(a => !a.acknowledged).length} alert{alerts.filter(a => !a.acknowledged).length !== 1 ? "s" : ""}</Badge>}
-            </div>
-            <div className="flex items-center gap-3 text-xs text-text-tertiary mt-1.5 flex-wrap">
-              <span><strong className="text-text-secondary">Bed</strong> {enc.bed || "--"}</span>
-              <span className="text-border">·</span>
-              <span><strong className="text-text-secondary">Dx</strong> {enc.admitting_diagnosis || "--"}</span>
-              <span className="text-border">·</span>
-              <span><strong className="text-text-secondary">Day</strong> {enc.length_of_stay || "--"}</span>
-              <span className="text-border">·</span>
-              <span>{data.gender}, DOB {data.birthDate || "--"}</span>
-              {data.active_conditions?.length > 0 && (
-                <>
-                  <span className="text-border">·</span>
-                  <span className="text-text-tertiary">{data.active_conditions.join(", ")}</span>
-                </>
-              )}
+              {hasAlerts && <Badge variant="critical">{alerts.filter(a => !a.acknowledged).length} Active Conflict{alerts.filter(a => !a.acknowledged).length !== 1 ? "s" : ""}</Badge>}
             </div>
           </div>
 
@@ -210,12 +185,32 @@ export default function PatientDetailPage({ params }) {
             {refreshing && (
               <span className="text-[10px] font-bold text-clinical-info uppercase animate-pulse mr-1">Syncing…</span>
             )}
-            <button onClick={() => setShowNoteForm(!showNoteForm)} className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-clinical-info text-white hover:bg-blue-700 transition-colors cursor-pointer">
+            <button onClick={() => setShowNoteForm(!showNoteForm)} className="text-xs font-bold px-4 py-2 rounded-xl bg-clinical-info text-white hover:bg-blue-700 shadow-sm transition-all cursor-pointer">
               + Note
             </button>
-            <button onClick={() => act("escalation_requested", "Consultant-initiated escalation")} disabled={actionLoading} className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-clinical-critical text-clinical-critical hover:bg-clinical-critical hover:text-white transition-colors cursor-pointer disabled:opacity-40">
+            <button onClick={() => act("escalation_requested", "Consultant-initiated escalation")} disabled={actionLoading} className="text-xs font-bold px-4 py-2 rounded-xl border-2 border-clinical-critical text-clinical-critical hover:bg-clinical-critical hover:text-white transition-all cursor-pointer disabled:opacity-40">
               Escalate
             </button>
+          </div>
+        </div>
+
+        {/* Big Info Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-surface-secondary rounded-xl p-4 border border-border">
+            <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest mb-1">Bed Number</p>
+            <p className="text-xl font-black text-text-primary">{enc.bed?.startsWith('Bed') ? enc.bed : `Bed ${enc.bed || '--'}`}</p>
+          </div>
+          <div className="bg-surface-secondary rounded-xl p-4 border border-border">
+            <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest mb-1">Diagnosis</p>
+            <p className="text-xl font-black text-text-primary truncate">{enc.admitting_diagnosis || "--"}</p>
+          </div>
+          <div className="bg-surface-secondary rounded-xl p-4 border border-border">
+            <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest mb-1">Responsible Consultant</p>
+            <p className="text-xl font-black text-text-primary truncate">{data.consultant || "--"}</p>
+          </div>
+          <div className="bg-surface-secondary rounded-xl p-4 border border-border">
+            <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest mb-1">Day {enc.length_of_stay || "--"}</p>
+            <p className="text-sm font-black text-text-secondary mt-1">{data.gender}, DOB {data.birthDate}</p>
           </div>
         </div>
 
@@ -258,32 +253,63 @@ export default function PatientDetailPage({ params }) {
           )}
         </div>
 
-        {/* Labs — 1/3 width */}
-        <Card title="Lab Results">
-          {data.lab_trends?.length > 0 ? (
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-border-light">
-                  <th className="text-left py-1.5 font-semibold text-text-tertiary uppercase">Test</th>
-                  <th className="text-right py-1.5 font-semibold text-text-tertiary uppercase">Prev</th>
-                  <th className="text-right py-1.5 font-semibold text-text-tertiary uppercase">Now</th>
-                  <th className="text-center py-1.5 w-8"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-light">
-                {data.lab_trends.map((t, i) => (
-                  <tr key={i}>
-                    <td className="py-2 font-medium text-text-primary">{t.parameter || t.loinc}</td>
-                    <td className="py-2 text-right text-text-tertiary tabular-nums">{t.oldest}</td>
-                    <td className="py-2 text-right font-bold text-text-primary tabular-nums">{t.newest}</td>
-                    <td className="py-2 text-center"><TrendIndicator direction={t.direction} /></td>
-                  </tr>
+        {/* Discharge Status — 1/3 width (Swapped from sidebar) */}
+        <Card title="Discharge Status">
+          <div className="mb-3 flex items-center justify-between">
+            <Badge variant={discharge.status === "Ready" ? "success" : discharge.status === "Requires Review" ? "warning" : "default"}>
+              {discharge.status || "--"}
+            </Badge>
+            {data.discharge_override && (
+              <span className="text-[9px] font-black text-clinical-info uppercase tracking-widest px-2 py-0.5 rounded bg-clinical-info-bg border border-clinical-info-border">
+                {data.discharge_override.replace(/_/g, " ")}
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            {/* Not Ready / Unmet */}
+            {discharge.checklist?.some(c => !c.met) && (
+              <div className="space-y-1">
+                <p className="text-[9px] font-bold text-clinical-critical uppercase tracking-wider mb-1">Needs Resolution</p>
+                {discharge.checklist.filter(c => !c.met).map((c, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <span className="font-bold text-clinical-critical">✗</span>
+                    <span className="text-text-primary font-medium">{c.item}</span>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          ) : (
-            <p className="text-sm text-text-tertiary">No lab data.</p>
-          )}
+              </div>
+            )}
+            
+            {/* Ready / Met */}
+            {discharge.checklist?.some(c => c.met) && (
+              <div className="space-y-1">
+                <p className="text-[9px] font-bold text-clinical-normal uppercase tracking-wider mb-1">Criteria Met</p>
+                {discharge.checklist.filter(c => c.met).map((c, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs opacity-60">
+                    <span className="font-bold text-clinical-normal">✓</span>
+                    <span className="text-text-tertiary">{c.item}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-2 mt-4 pt-3 border-t border-border">
+            <button
+              onClick={() => act("discharge_approved", "Clinically safe for discharge")}
+              disabled={actionLoading}
+              className="flex-1 text-[10px] font-bold py-1.5 rounded-lg bg-clinical-normal/10 text-clinical-normal border border-clinical-normal/20 hover:bg-clinical-normal hover:text-white transition-colors cursor-pointer disabled:opacity-40"
+            >
+              Approve
+            </button>
+            <button
+              onClick={() => act("discharge_blocked", "Discharge not safe")}
+              disabled={actionLoading}
+              className="flex-1 text-[10px] font-bold py-1.5 rounded-lg border border-clinical-critical/20 text-clinical-critical hover:bg-clinical-critical hover:text-white transition-colors cursor-pointer disabled:opacity-40"
+            >
+              Block
+            </button>
+          </div>
         </Card>
       </div>
 
@@ -325,15 +351,54 @@ export default function PatientDetailPage({ params }) {
                   <p className="text-sm text-text-primary leading-relaxed">{briefing.suggested_plan_adjustments}</p>
                 </div>
               )}
+
+              {/* Diagnostic Reports (Unlocked) */}
+              {data.diagnostic_reports?.length > 0 && (
+                <div className="pt-4 border-t border-border-light">
+                  <h4 className="text-[10px] font-bold text-text-tertiary uppercase tracking-widest mb-2">Diagnostic Reports</h4>
+                  <div className="space-y-3">
+                    {data.diagnostic_reports.map((dr, i) => (
+                      <div key={i} className="bg-surface-secondary rounded-lg p-2.5 border border-border-light">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-black text-text-primary uppercase">{dr.test}</span>
+                          <span className="text-[9px] text-text-tertiary tabular-nums font-medium">{dr.date?.slice(0, 10)}</span>
+                        </div>
+                        <p className="text-xs text-text-secondary font-medium leading-relaxed italic">"{dr.conclusion}"</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </Card>
 
-          {/* Alerts (only if any exist) */}
+          {/* Audit Trail (Unlocked) */}
+          {data.audit_trail?.length > 0 && (
+            <Card title="Clinical Audit Trail">
+              <div className="space-y-4">
+                {data.audit_trail.map((entry, i) => (
+                  <div key={i} className="flex gap-3 text-xs">
+                    <div className="w-1 bg-clinical-info/20 rounded-full shrink-0" />
+                    <div>
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="font-bold text-text-primary">{entry.from}</span>
+                        <span className="text-[10px] text-text-tertiary">→ {entry.to}</span>
+                        <span className="text-[9px] text-text-tertiary tabular-nums ml-auto">{entry.date?.slice(5, 16).replace('T', ' ')}</span>
+                      </div>
+                      <p className="text-text-secondary leading-relaxed">{entry.message}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Conflicts (only if any exist) */}
           {hasAlerts && (
             <Card 
-              title={`Alerts & Safety Flags`} 
+              title={`Conflicts & Safety Flags`} 
               accent="border-l-4 border-l-clinical-critical"
-              headerRight={<Badge variant="critical">{alerts.filter(a => !a.acknowledged).length} Active</Badge>}
+              headerRight={<Badge variant="critical">{alerts.filter(a => !a.acknowledged).length} Active Conflict{alerts.filter(a => !a.acknowledged).length !== 1 ? "s" : ""}</Badge>}
             >
               <div className="space-y-4">
                 {/* Scrollable list for rule-based alerts */}
@@ -387,56 +452,81 @@ export default function PatientDetailPage({ params }) {
 
         {/* RIGHT — Discharge + Drug Safety (1/3) */}
         <div className="space-y-5">
-          {/* Discharge */}
-          <Card title="Discharge Status">
-            <div className="mb-3">
-              <Badge variant={discharge.status === "Ready" ? "success" : discharge.status === "Requires Review" ? "warning" : "default"}>
-                {discharge.status || "--"}
-              </Badge>
-              {data.discharge_override && (
-                <span className="ml-2 text-[10px] font-bold text-clinical-info uppercase">
-                  ({data.discharge_override.replace(/_/g, " ")})
-                </span>
-              )}
-            </div>
+          {/* Lab Results — Swapped from top row */}
+          <Card title="Lab Results">
+            {data.lab_trends?.length > 0 ? (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border-light">
+                    <th className="text-left py-1.5 font-semibold text-text-tertiary uppercase">Test</th>
+                    <th className="text-right py-1.5 font-semibold text-text-tertiary uppercase">Prev</th>
+                    <th className="text-right py-1.5 font-semibold text-text-tertiary uppercase">Now</th>
+                    <th className="text-center py-1.5 w-8"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-light">
+                  {data.lab_trends.map((t, i) => (
+                    <tr key={i}>
+                      <td className="py-2 font-medium text-text-primary">{t.parameter || t.loinc}</td>
+                      <td className="py-2 text-right text-text-tertiary tabular-nums">
+                        {typeof t.oldest === "number" ? t.oldest.toFixed(2) : t.oldest}
+                      </td>
+                      <td className="py-2 text-right font-bold text-text-primary tabular-nums">
+                        {typeof t.newest === "number" ? t.newest.toFixed(2) : t.newest}
+                      </td>
+                      <td className="py-2 text-center"><TrendIndicator direction={t.direction} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="text-sm text-text-tertiary">No lab data.</p>
+            )}
+          </Card>
 
-            <div className="space-y-1">
-              {(discharge.checklist || []).map((c, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs">
-                  <span className={`font-bold ${c.met ? "text-clinical-normal" : "text-clinical-critical"}`}>
-                    {c.met ? "✓" : "✗"}
-                  </span>
-                  <span className={c.met ? "text-text-tertiary" : "text-text-primary font-medium"}>
-                    {c.item}
-                  </span>
-                </div>
-              ))}
-            </div>
-
-            <div className="flex gap-2 mt-4 pt-3 border-t border-border">
-              <button
-                onClick={() => act("discharge_approved", "Clinically safe for discharge")}
-                disabled={actionLoading}
-                className="flex-1 text-[10px] font-bold py-1.5 rounded-lg bg-clinical-normal/10 text-clinical-normal border border-clinical-normal/20 hover:bg-clinical-normal hover:text-white transition-colors cursor-pointer disabled:opacity-40"
-              >
-                Approve
-              </button>
-              <button
-                onClick={() => act("discharge_blocked", "Discharge not safe")}
-                disabled={actionLoading}
-                className="flex-1 text-[10px] font-bold py-1.5 rounded-lg border border-clinical-critical/20 text-clinical-critical hover:bg-clinical-critical hover:text-white transition-colors cursor-pointer disabled:opacity-40"
-              >
-                Block
-              </button>
-            </div>
+          {/* Active Medications */}
+          <Card title="Active Medications">
+            {activeMeds.length > 0 ? (
+              <div className="space-y-2">
+                {activeMeds.map((m, i) => (
+                  <div key={i} className="flex items-start justify-between text-xs py-1 border-b border-border-light last:border-0">
+                    <span className="font-bold text-text-primary">{m.name || m.medication}</span>
+                    <span className="text-text-tertiary">{m.dosage || m.dosageInstruction}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-text-tertiary">No active medications.</p>
+            )}
           </Card>
 
           {/* Drug Safety */}
           {data.fda_safety?.drug_warnings?.length > 0 && (
-            <Card title="Drug Safety">
+            <Card 
+              title="Drug Safety" 
+              footer={
+                <div className="mt-2 text-[9px] text-text-tertiary italic text-right">
+                  Powered by OpenFDA Real-time Intelligence
+                </div>
+              }
+            >
               <div className="space-y-2">
                 {data.fda_safety.drug_warnings.map((w, i) => (
                   <DrugWarning key={i} w={w} />
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {/* Allergies (Unlocked) */}
+          {data.allergies?.length > 0 && (
+            <Card title="Allergies">
+              <div className="flex flex-wrap gap-2">
+                {data.allergies.map((a, i) => (
+                  <div key={i} className={`flex items-center gap-2 px-2.5 py-1 rounded-lg border ${a.criticality === 'high' ? 'bg-clinical-critical/10 border-clinical-critical/20 text-clinical-critical' : 'bg-surface-secondary border-border text-text-secondary'}`}>
+                    <span className="text-xs font-bold">{a.name}</span>
+                    <span className="text-[9px] font-black uppercase tracking-widest opacity-50">{a.criticality}</span>
+                  </div>
                 ))}
               </div>
             </Card>
@@ -447,7 +537,65 @@ export default function PatientDetailPage({ params }) {
       {/* ══════════════════════════════════════════════════════════
           FIXED WIDGET — Clinical Notes (Bottom Right)
          ══════════════════════════════════════════════════════════ */}
-      <ClinicalNotesWidget notes={data.clinical_notes} />
+      <ClinicalNotesWidget notes={clinicalNotes} />
+
+      {/* ══════════════════════════════════════════════════════════
+          STICKY NAVIGATOR — Bottom Center (White Theme)
+         ══════════════════════════════════════════════════════════ */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none">
+        <div className="bg-white border border-border rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] p-2.5 flex items-center justify-between pointer-events-auto">
+          {/* Prev Button */}
+          <Link 
+            href={prevPatient ? `/dashboard/patient/${prevPatient.patient_id}` : "#"}
+            className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all ${prevPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
+          >
+            <span className="text-xl">←</span>
+          </Link>
+
+          {/* Patient Quick Info */}
+          <div className="flex-1 px-6 flex items-center justify-between gap-4">
+            <div className="text-left">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black bg-text-primary text-white px-1.5 py-0.5 rounded uppercase">
+                  {enc.bed?.startsWith('Bed') ? enc.bed : `Bed ${enc.bed}`}
+                </span>
+                <h4 className="text-sm font-bold text-text-primary truncate max-w-[140px]">{data.name}</h4>
+              </div>
+              <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-tight mt-0.5 truncate max-w-[180px]">
+                Diagnosis: {enc.admitting_diagnosis}
+              </p>
+            </div>
+            
+            <div className="text-right">
+              <div className="flex items-center justify-end gap-2">
+                <span className={`text-[10px] font-black uppercase ${news2.risk_level === 'HIGH' ? 'text-clinical-critical' : 'text-clinical-normal'}`}>
+                  NEWS2 {news2.total_score}
+                </span>
+                <span className="text-[10px] font-bold text-text-tertiary">Day {enc.length_of_stay}</span>
+              </div>
+              <span className="text-[9px] text-text-tertiary tabular-nums font-bold">
+                {currentIdx + 1} / {wardList.length} INPATIENTS
+              </span>
+            </div>
+          </div>
+
+          {/* Next Button */}
+          <div className="flex items-center gap-2">
+            <Link 
+              href={nextPatient ? `/dashboard/patient/${nextPatient.patient_id}` : "#"}
+              className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all ${nextPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
+            >
+              <span className="text-xl">→</span>
+            </Link>
+            
+            <div className="w-px h-6 bg-border mx-1" />
+            
+            <Link href="/dashboard" className="w-11 h-11 flex items-center justify-center rounded-xl bg-clinical-info text-white hover:bg-blue-700 transition-all shadow-md">
+              <span className="text-lg">⊞</span>
+            </Link>
+          </div>
+        </div>
+      </div>
 
       {toast && <Toast message={toast} onClose={() => setToast("")} />}
     </div>

@@ -17,16 +17,21 @@ RETRY_DELAY = 2.0  # seconds, doubles on each retry
 class FHIRClient:
     """Lightweight async wrapper around FHIR R4 REST API."""
 
-    def __init__(self, base_url: str | None = None):
+    def __init__(self, base_url: str | None = None, access_token: str | None = None):
         self.base_url = (base_url or config.FHIR_BASE_URL).rstrip("/")
+        self.access_token = access_token or config.FHIR_ACCESS_TOKEN
         self._client: httpx.AsyncClient | None = None
 
     # -- lifecycle ------------------------------------------------------
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
+            headers = {"Accept": "application/fhir+json"}
+            if self.access_token:
+                headers["Authorization"] = f"Bearer {self.access_token}"
+            
             self._client = httpx.AsyncClient(
                 base_url=self.base_url,
-                headers={"Accept": "application/fhir+json"},
+                headers=headers,
                 timeout=30.0,
             )
         return self._client
@@ -200,7 +205,7 @@ class FHIRClient:
             "_count": "10",
         })
         # Client-side filter for active status
-        return [f for f in results if f.get("status") == "active"] or results
+        return [f for f in results if f.get("status") in ("active", "current", "completed")] or results
 
     async def _post(self, resource: str, data: dict) -> dict:
         """Create a new resource on the FHIR server."""
@@ -393,6 +398,18 @@ class FHIRClient:
             "conclusion": conclusion
         }
         return await self._post("DiagnosticReport", dr)
+
+    async def get_care_team(self, patient_id: str) -> list[dict]:
+        """Fetch CareTeam resources for a patient."""
+        return await self.search("CareTeam", {"subject": f"Patient/{patient_id}"})
+
+    async def get_communications(self, patient_id: str) -> list[dict]:
+        """Fetch Communication resources (Audit Trail) for a patient."""
+        return await self.search("Communication", {"subject": f"Patient/{patient_id}", "_sort": "-sent"})
+
+    async def get_diagnostic_reports(self, patient_id: str) -> list[dict]:
+        """Fetch DiagnosticReport resources for a patient."""
+        return await self.search("DiagnosticReport", {"subject": f"Patient/{patient_id}"})
 
     async def create_communication(self, patient_id: str, sender: str, recipient: str, payload: str, timestamp: str) -> dict:
         """Create a Communication resource (Audit Log)."""

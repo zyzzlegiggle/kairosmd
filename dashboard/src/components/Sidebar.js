@@ -101,15 +101,24 @@ export default function Sidebar() {
             { name: "Dr. Mike", role: "Consultant", initial: "DM" },
             { name: "Dr. Sarah", role: "Registrar", initial: "DS" }
           ].map((doc) => {
-            const isSelected = (typeof window !== 'undefined' ? localStorage.getItem("clinician_name") : "Dr. Mike") === doc.name || (!localStorage.getItem("clinician_name") && doc.name === "Dr. Mike");
+            let isSelected = false;
+            if (typeof window !== 'undefined') {
+              const current = localStorage.getItem("clinician_name") || "Dr. Mike";
+              isSelected = current === doc.name;
+            } else {
+              // Server-side default
+              isSelected = doc.name === "Dr. Mike";
+            }
             
             return (
               <button
                 key={doc.name}
                 onClick={() => {
-                  localStorage.setItem("clinician_name", doc.name);
-                  localStorage.setItem("clinician_role", doc.role);
-                  window.location.reload(); // Quick way to sync state across all components
+                  if (typeof window !== 'undefined') {
+                    localStorage.setItem("clinician_name", doc.name);
+                    localStorage.setItem("clinician_role", doc.role);
+                    window.location.reload();
+                  }
                 }}
                 className={`w-full flex items-center gap-3 p-2 rounded-lg transition-all text-left ${
                   isSelected ? "bg-white/10 ring-1 ring-white/20" : "hover:bg-white/5 opacity-50"

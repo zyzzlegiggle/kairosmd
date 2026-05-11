@@ -1,5 +1,12 @@
 """KairosMD MCP Server - Multidisciplinary Ward Round Decision Support (MDS).
 
+SHARP-on-MCP Compliant Server.
+Implements the Standardized Healthcare Agent Remote Protocol (SHARP) extension
+spec for healthcare context propagation via HTTP headers:
+  - X-FHIR-Server-URL   → Dynamic FHIR backend selection
+  - X-FHIR-Access-Token  → Scoped OAuth2 bearer token
+  - X-Patient-ID         → Patient-in-context (optional)
+
 Exposes 7 MCP tools:
   1. get_ward_round_summary  - Full ward overview sorted by priority
   2. get_patient_ward_detail - Deep dive into single patient
@@ -16,6 +23,11 @@ import asyncio
 from datetime import date
 
 from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp.server.dependencies import get_http_headers
+except ImportError:
+    # Fallback for different mcp versions
+    get_http_headers = lambda: {}
 
 from kairosmd import config
 from kairosmd.fhir_client import FHIRClient
@@ -27,7 +39,22 @@ from kairosmd.ward_actions import (
 )
 
 mcp = FastMCP("KairosMD MDS")
-fhir = FHIRClient()
+
+def get_fhir_client() -> FHIRClient:
+    """SHARP-on-MCP: Resolve FHIR context from HTTP headers or fallback to config."""
+    try:
+        headers = get_http_headers()
+        url = headers.get("x-fhir-server-url")
+        token = headers.get("x-fhir-access-token")
+        
+        if url:
+            print(f"  [SHARP] Using dynamic context: {url}")
+            return FHIRClient(base_url=url, access_token=token)
+    except Exception:
+        pass
+    
+    # Fallback to default client
+    return FHIRClient()
 
 # Priority sort order for ward round
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -122,11 +149,21 @@ async def _process_patient(pid: str, fhir: FHIRClient) -> dict:
         med_admins = await fhir.get_med_admins(pid)
         await asyncio.sleep(0.3)
         flags = await fhir.get_flags(pid)
+        await asyncio.sleep(0.3)
+        care_team = await fhir.get_care_team(pid)
+        await asyncio.sleep(0.3)
+        communications = await fhir.get_communications(pid)
+        await asyncio.sleep(0.3)
+        diag_reports = await fhir.get_diagnostic_reports(pid)
 
         # Run ward engine
         result = await compile_patient_ward_data(
             vitals, labs, notes, conditions, medications,
-            allergies, med_admins, flags, encounter,
+            allergies, med_admins, flags, 
+            care_team=care_team,
+            communications=communications,
+            diag_reports=diag_reports,
+            encounter=encounter,
         )
 
         # Generate LLM briefing
@@ -252,8 +289,8 @@ async def get_ward_round_summary(limit: int = 3) -> str:
     - AI-generated clinical briefing
 
     Sorted by clinical priority (high risk first, discharge ready last).
-    """
-    all_patient_ids = await _get_ward_patient_ids(fhir)
+    client = get_fhir_client()
+    all_patient_ids = await _get_ward_patient_ids(client)
     patient_ids = all_patient_ids[:limit]
 
     if not patient_ids:
@@ -266,7 +303,7 @@ async def get_ward_round_summary(limit: int = 3) -> str:
     ward_list = []
     for i, pid in enumerate(patient_ids):
         print(f"  Processing patient {i+1}/{len(patient_ids)} ({pid})...")
-        entry = await _process_patient(pid, fhir)
+        entry = await _process_patient(pid, client)
         ward_list.append(entry)
         if i < len(patient_ids) - 1:
             await asyncio.sleep(1.0)
@@ -316,7 +353,8 @@ async def get_patient_ward_detail(patient_id: str) -> str:
     Returns detailed clinical data including vitals, labs, medications,
     notes, NEWS2 score, conflicts, discharge readiness, and AI briefing.
     """
-    entry = await _process_patient(patient_id, fhir)
+    client = get_fhir_client()
+    entry = await _process_patient(patient_id, client)
     entry["dashboard_url"] = f"{config.DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}"
 
     result = json.dumps(entry, indent=2)
@@ -328,17 +366,22 @@ async def get_patient_ward_detail(patient_id: str) -> str:
 # TOOL 3: get_discharge_candidates
 # =====================================================================
 @mcp.tool()
-async def get_discharge_candidates() -> str:
+async def get_discharge_candidates(limit: int = 3) -> str:
     """Get patients who are ready or near-ready for discharge.
+
+    Args:
+        limit: Maximum number of patients to check (default 3).
 
     Returns patients flagged as 'Ready' or 'Requires Review',
     sorted by length of stay (longest first).
     """
-    patient_ids = await _get_ward_patient_ids(fhir)
+    client = get_fhir_client()
+    all_patient_ids = await _get_ward_patient_ids(client)
+    patient_ids = all_patient_ids[:limit]
 
     candidates = []
     for i, pid in enumerate(patient_ids):
-        entry = await _process_patient(pid, fhir)
+        entry = await _process_patient(pid, client)
         status = entry.get("discharge", {}).get("status", "")
         if status in ("Ready", "Requires Review"):
             candidates.append(entry)
@@ -366,18 +409,23 @@ async def get_discharge_candidates() -> str:
 # TOOL 4: get_conflict_report
 # =====================================================================
 @mcp.tool()
-async def get_conflict_report() -> str:
+async def get_conflict_report(limit: int = 3) -> str:
     """Get all detected clinical conflicts across the ward.
+
+    Args:
+        limit: Maximum number of patients to check (default 3).
 
     Returns patients with active conflicts sorted by severity.
     Includes allergy-medication conflicts, drug interactions,
     missed doses, and note-vs-data contradictions.
     """
-    patient_ids = await _get_ward_patient_ids(fhir)
+    client = get_fhir_client()
+    all_patient_ids = await _get_ward_patient_ids(client)
+    patient_ids = all_patient_ids[:limit]
 
     conflict_patients = []
     for i, pid in enumerate(patient_ids):
-        entry = await _process_patient(pid, fhir)
+        entry = await _process_patient(pid, client)
         if entry.get("conflict_count", 0) > 0:
             conflict_patients.append(entry)
         if i < len(patient_ids) - 1:

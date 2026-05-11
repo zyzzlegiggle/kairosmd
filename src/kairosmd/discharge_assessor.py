@@ -100,6 +100,16 @@ def assess_discharge_readiness(
     if not afebrile:
         blockers.append("Patient has had fever in last 24 hours")
 
+    # 7. Social and Functional Stability (Scan notes for social care/mobility readiness)
+    social_ok = _check_social_functional(notes)
+    checklist.append({
+        "item": "Social and functional stability documented",
+        "met": social_ok,
+        "detail": "Social/Functional readiness noted" if social_ok else "No social care or mobility clearance found",
+    })
+    if not social_ok:
+        blockers.append("Pending social care or functional (PT/OT) review")
+
     # Determine overall status
     critical_blockers = [b for b in blockers if "critical" in b.lower() or "IV" in b or "NEWS2" in b]
     if len(blockers) == 0:
@@ -217,3 +227,27 @@ def _check_afebrile(vitals_obs: list[dict]) -> bool:
         if val is not None and val >= 38.0:
             return False
     return True
+
+
+def _check_social_functional(notes: list[dict]) -> bool:
+    """Check if notes mention social care or functional readiness."""
+    import base64
+    social_keywords = [
+        "package of care", "poc ", "socially fit", "safe at home",
+        "mobility stable", "walking well", "physio review complete",
+        "occupational therapy", "ot review", "mffd", "medically fit"
+    ]
+    for note in notes:
+        text = ""
+        for content in note.get("content", []):
+            att = content.get("attachment", {})
+            if att.get("data"):
+                try:
+                    text = base64.b64decode(att["data"]).decode("utf-8", errors="replace")
+                except Exception:
+                    pass
+        if note.get("description"):
+            text = text or note.get("description", "")
+        if any(kw in text.lower() for kw in social_keywords):
+            return True
+    return False

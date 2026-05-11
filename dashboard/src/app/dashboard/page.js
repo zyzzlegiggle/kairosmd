@@ -328,8 +328,8 @@ export default function DashboardPage() {
                     <span className="text-text-tertiary text-xs">--</span>
                   )}
                 </td>
-                <td className="px-3 py-3.5">
-                  <DischargeBadge status={p.discharge?.status} />
+                <td className="px-3 py-3.5 text-center">
+                  <DischargeBadge status={p.discharge?.status} override={p.discharge_override} />
                 </td>
               </tr>
             ))}
@@ -345,16 +345,28 @@ export default function DashboardPage() {
   );
 }
 
-function DischargeBadge({ status }) {
-  if (!status) return <span className="text-xs text-text-tertiary">--</span>;
+function DischargeBadge({ status, override }) {
+  if (!status && !override) return <span className="text-xs text-text-tertiary">--</span>;
+  
+  const displayStatus = override ? (override === "discharge_approved" ? "APPROVED" : "BLOCKED") : status;
+  const isOverride = !!override;
+
   const styles = {
     Ready: "text-clinical-normal bg-clinical-normal-bg border-clinical-normal-border",
     "Requires Review": "text-clinical-warning bg-clinical-warning-bg border-clinical-warning-border",
     "Not Ready": "text-text-secondary bg-surface-secondary border-border",
+    APPROVED: "text-white bg-clinical-normal border-clinical-normal",
+    BLOCKED: "text-white bg-clinical-critical border-clinical-critical",
   };
+
   return (
-    <span className={`inline-block text-[11px] font-semibold px-2 py-0.5 rounded border ${styles[status] || styles["Not Ready"]}`}>
-      {status}
-    </span>
+    <div className="flex flex-col items-center gap-1">
+      <span className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded border ${styles[displayStatus] || styles["Not Ready"]}`}>
+        {displayStatus}
+      </span>
+      {isOverride && (
+        <span className="text-[8px] font-bold text-clinical-info uppercase tracking-tighter">Clinician Override</span>
+      )}
+    </div>
   );
 }

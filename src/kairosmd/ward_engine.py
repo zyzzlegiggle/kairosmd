@@ -210,6 +210,9 @@ async def compile_patient_ward_data(
     allergies: list[dict],
     med_admins: list[dict],
     flags: list[dict],
+    care_team: list[dict] | None = None,
+    communications: list[dict] | None = None,
+    diag_reports: list[dict] | None = None,
     encounter: dict | None = None,
 ) -> dict:
     """Compile all ward round analysis for a single patient.
@@ -242,20 +245,50 @@ async def compile_patient_ward_data(
     enc_info = _get_encounter_info(encounter)
 
     # 8. Active conditions
-    condition_names = []
-    for cond in conditions:
-        name = cond.get("code", {}).get("text", "")
-        if not name:
-            codings = cond.get("code", {}).get("coding", [])
-            name = codings[0].get("display", "Unknown") if codings else "Unknown"
-        condition_names.append(name)
+    condition_names = [cond.get("code", {}).get("text", "") or 
+                       cond.get("code", {}).get("coding", [{}])[0].get("display", "Unknown") 
+                       for cond in conditions]
 
-    # 9. Safety flags
+    # 9. Safety flags (with detail)
     safety_flags = []
     for f in flags:
-        safety_flags.append(f.get("code", {}).get("text", ""))
+        text = f.get("code", {}).get("text", "Unknown Flag")
+        safety_flags.append(text)
 
-    # 10. FDA Safety Enrichment (real external API data)
+    # 10. Care Team & Consultant
+    team_members = []
+    responsible_consultant = "Unassigned"
+    if care_team:
+        for ct in care_team:
+            for part in ct.get("participant", []):
+                name = part.get("member", {}).get("display", "Unknown")
+                role = part.get("role", [{}])[0].get("text", "Member")
+                team_members.append({"name": name, "role": role})
+                if "Consultant" in role:
+                    responsible_consultant = name
+
+    # 11. Audit Trail (Communications)
+    audit_trail = []
+    if communications:
+        for c in communications:
+            audit_trail.append({
+                "date": c.get("sent", ""),
+                "from": c.get("sender", {}).get("display", "Unknown"),
+                "to": c.get("recipient", [{}])[0].get("display", "Team"),
+                "message": c.get("payload", [{}])[0].get("contentString", "")
+            })
+
+    # 12. Diagnostic Reports
+    diagnostic_conclusions = []
+    if diag_reports:
+        for dr in diag_reports:
+            diagnostic_conclusions.append({
+                "test": dr.get("code", {}).get("text", "Report"),
+                "conclusion": dr.get("conclusion", ""),
+                "date": dr.get("effectiveDateTime", "")
+            })
+
+    # 13. FDA Safety Enrichment
     fda_safety = await _enrich_with_fda_data(medications, conflicts)
 
     return {
@@ -271,6 +304,12 @@ async def compile_patient_ward_data(
         "active_conditions": condition_names,
         "clinical_notes": parsed_notes,
         "safety_flags": safety_flags,
+        "active_medications": medications,
+        "allergies": [{"name": a.get("code", {}).get("text", ""), "criticality": a.get("criticality", "low")} for a in allergies],
+        "care_team": team_members,
+        "consultant": responsible_consultant,
+        "audit_trail": audit_trail,
+        "diagnostic_reports": diagnostic_conclusions,
         "priority": news2["risk_level"],
         "fda_safety": fda_safety,
     }
