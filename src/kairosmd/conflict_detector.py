@@ -85,12 +85,15 @@ def detect_drug_interactions(medications: list[dict]) -> list[dict]:
 
     interactions = check_interactions_local(med_names)
     conflicts = []
-    for pair, desc in interactions:
+    for ix in interactions:
+        a = ix["drug_a"]
+        b = ix["drug_b"]
+        desc = ix["description"]
         conflicts.append({
             "type": "drug_drug_interaction",
             "severity": HIGH,
-            "drugs": list(pair),
-            "message": f"DRUG INTERACTION: {pair[0]} + {pair[1]} - {desc}",
+            "drugs": [a, b],
+            "message": f"DRUG INTERACTION: {a} + {b} — {desc}",
         })
     return conflicts
 

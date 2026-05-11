@@ -1,20 +1,18 @@
-"""KairosMD MCP Server - Multidisciplinary Ward Round Decision Support (MDS).
+"""KairosMD MCP Server — Multidisciplinary Ward Round Decision Support (MDS).
 
-SHARP-on-MCP Compliant Server.
-Implements the Standardized Healthcare Agent Remote Protocol (SHARP) extension
-spec for healthcare context propagation via HTTP headers:
-  - X-FHIR-Server-URL   → Dynamic FHIR backend selection
-  - X-FHIR-Access-Token  → Scoped OAuth2 bearer token
-  - X-Patient-ID         → Patient-in-context (optional)
+Connects to FHIR R4 backend for clinical data. Supports dynamic FHIR context
+via X-FHIR-Server-URL / X-FHIR-Access-Token headers (SHARP-on-MCP), falling
+back to configured defaults.
 
-Exposes 7 MCP tools:
-  1. get_ward_round_summary  - Full ward overview sorted by priority
-  2. get_patient_ward_detail - Deep dive into single patient
-  3. get_discharge_candidates - Patients ready or near-ready for discharge
-  4. get_conflict_report     - All detected conflicts across the ward
-  5. record_ward_action      - Record MDT clinical actions (acknowledge, escalate, etc.)
-  6. get_action_history      - Chronological MDT activity log
-  7. get_drug_safety_info    - Real FDA drug label + adverse event lookup (OpenFDA)
+Exposes 8 MCP tools:
+  1. get_ward_round_summary   - Prioritised ward overview
+  2. get_patient_ward_detail  - Single-patient deep dive
+  3. get_discharge_candidates - Discharge readiness assessment
+  4. get_conflict_report      - Cross-source conflict detection
+  5. record_ward_action       - MDT action persistence
+  6. get_action_history       - Clinical audit trail
+  7. get_drug_safety_info     - FDA label + FAERS lookup (OpenFDA)
+  8. get_dashboard_access     - Visual dashboard links
 """
 
 from __future__ import annotations

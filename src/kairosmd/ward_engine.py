@@ -105,6 +105,7 @@ def _detect_overnight_trends(vitals_obs: list[dict]) -> list[dict]:
             "direction": direction,
             "change_pct": round(pct, 1),
             "concerning": concerning,
+            "history": [{"time": r[0], "value": r[1]} for r in readings],
         })
 
     return trends
@@ -162,6 +163,7 @@ def _detect_lab_trends(labs_obs: list[dict]) -> list[dict]:
             "parameter": display, "loinc": loinc,
             "oldest": oldest_val, "newest": newest_val,
             "direction": direction,
+            "history": [{"time": r[0], "value": r[1]} for r in readings],
         })
 
     return trends
@@ -291,6 +293,22 @@ async def compile_patient_ward_data(
     # 13. FDA Safety Enrichment
     fda_safety = await _enrich_with_fda_data(medications, conflicts)
 
+    # 14. Normalize active medications for dashboard display
+    active_meds = []
+    for med in medications:
+        name = med.get("medicationCodeableConcept", {}).get("text", "")
+        if not name:
+            codings = med.get("medicationCodeableConcept", {}).get("coding", [])
+            name = codings[0].get("display", "Unknown") if codings else "Unknown"
+        dosage_list = med.get("dosageInstruction", [])
+        dosage = dosage_list[0].get("text", "") if dosage_list else ""
+        active_meds.append({
+            "name": name,
+            "dosage": dosage,
+            "status": med.get("status", "active"),
+            "code": med.get("medicationCodeableConcept", {}).get("coding", [{}])[0].get("code", ""),
+        })
+
     return {
         "encounter": enc_info,
         "news2": news2,
@@ -304,7 +322,7 @@ async def compile_patient_ward_data(
         "active_conditions": condition_names,
         "clinical_notes": parsed_notes,
         "safety_flags": safety_flags,
-        "active_medications": medications,
+        "active_medications": active_meds,
         "allergies": [{"name": a.get("code", {}).get("text", ""), "criticality": a.get("criticality", "low")} for a in allergies],
         "care_team": team_members,
         "consultant": responsible_consultant,

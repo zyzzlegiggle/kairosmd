@@ -159,7 +159,7 @@ export default function PatientDetailPage({ params }) {
   
   // 4. Medications
   const rawMeds   = data.active_medications || [];
-  const activeMeds = [...new Map(rawMeds.map(m => [m.name || m.medication, m])).values()];
+  const activeMeds = [...new Map(rawMeds.map(m => [m.name, m])).values()];
   
   const hasAlerts = alerts.length > 0 || flags.length > 0;
 
@@ -440,7 +440,7 @@ export default function PatientDetailPage({ params }) {
                   <div className="flex flex-wrap gap-1.5 pt-3 border-t border-border-light">
                     {flags.map((f, i) => (
                       <span key={i} className="text-[9px] font-black text-clinical-warning bg-clinical-warning-bg/50 border border-clinical-warning-border/30 px-2 py-0.5 rounded-md uppercase flex items-center gap-1">
-                        <span className="text-xs">!</span> {f}
+                        <span className="text-xs">!</span> {typeof f === 'string' ? f : (f?.text || f?.code || JSON.stringify(f))}
                       </span>
                     ))}
                   </div>
@@ -490,8 +490,8 @@ export default function PatientDetailPage({ params }) {
               <div className="space-y-2">
                 {activeMeds.map((m, i) => (
                   <div key={i} className="flex items-start justify-between text-xs py-1 border-b border-border-light last:border-0">
-                    <span className="font-bold text-text-primary">{m.name || m.medication}</span>
-                    <span className="text-text-tertiary">{m.dosage || m.dosageInstruction}</span>
+                    <span className="font-bold text-text-primary">{m.name}</span>
+                    <span className="text-text-tertiary text-right max-w-[120px] truncate">{m.dosage}</span>
                   </div>
                 ))}
               </div>
