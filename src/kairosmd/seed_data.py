@@ -1,6 +1,6 @@
 """
 Multidisciplinary Ward Round Decision Support (MDS) - Scenario Bank.
-Contains 20 high-fidelity clinical scenarios for General Medicine Ward 4.
+Contains 20 high-fidelity clinical scenarios for General Medicine.
 Mix: ~8 with conflicts, ~5 stable/routine, ~4 improving/discharge-ready, ~3 deteriorating.
 """
 
@@ -174,7 +174,7 @@ SCENARIOS = [
         "vitals_trend": "deteriorating",
         "labs": [
             {"code": "718-7", "name": "Hb", "value": 7.2, "unit": "g/dL", "flag": "L"},
-            {"code": "6301-5", "name": "INR", "value": 4.8, "unit": "", "flag": "H"},
+            {"code": "6301-5", "name": "INR", "value": 4.8, "flag": "H"},
         ],
         "notes": {
             "consultant": "Day 2: UGIE showed gastric ulcer. Hb 8.5. Keep NBM. Hold Warfarin.",
@@ -345,7 +345,7 @@ SCENARIOS = [
         "vitals_trend": "deteriorating",
         "labs": [
             {"code": "718-7", "name": "Hb", "value": 6.8, "unit": "g/dL", "flag": "L"},
-            {"code": "6301-5", "name": "INR", "value": 2.1, "unit": "", "flag": "H"},
+            {"code": "6301-5", "name": "INR", "value": 2.1, "flag": "H"},
             {"code": "1742-6", "name": "ALT", "value": 120, "unit": "U/L", "flag": "H"},
         ],
         "notes": {
@@ -387,7 +387,7 @@ SCENARIOS = [
         "vitals_trend": "stable",
         "labs": [
             {"code": "1742-6", "name": "ALT", "value": 85, "unit": "U/L", "flag": "H"},
-            {"code": "2345-7", "name": "Glucose", "value": 4.2, "unit": "mmol/L", "flag": ""},
+            {"code": "2345-7", "name": "Glucose", "value": 4.2, "unit": "mmol/L"},
         ],
         "notes": {
             "clerking": "38yo male. Heavy alcohol use. CIWA score 18 on admission. Tremor, sweating, agitation. Plan: Chlordiazepoxide reducing regime, IV Pabrinex, monitor CIWA.",

@@ -1,5 +1,5 @@
 """MDS Scenario-Based Seeder.
-Generates 20 high-fidelity clinical scenarios for Ward 4.
+Generates 20 high-fidelity clinical scenarios for General Medicine.
 """
 
 import asyncio
@@ -16,7 +16,7 @@ async def purge_ward():
     print("--- [PURGE] Skipping purge (public server). Seeding fresh data. ---")
 
 def get_vitals_for_trend(trend: str, hour: int):
-    """Generate realistic NEWS2 vitals based on a clinical trend."""
+    """Generate realistic NEWS2 vitals based on a clinical trend with natural jitter."""
     # Base values for a healthy-ish adult
     rr, spo2, sbp, hr, temp = 16, 97, 125, 75, 36.8
     
@@ -26,12 +26,22 @@ def get_vitals_for_trend(trend: str, hour: int):
         spo2 -= (hour // 4) * 2
         sbp -= (hour // 4) * 5
         hr += (hour // 4) * 5
-        temp = 38.5 if hour > 12 else 37.2
+        temp = round(random.uniform(38.0, 39.2), 1) if hour > 12 else round(random.uniform(36.8, 37.5), 1)
     elif trend == "improving":
-        # Vitals normalize
-        rr = max(16, 24 - (hour // 4) * 2)
-        spo2 = min(98, 88 + (hour // 4) * 2)
-        hr = max(72, 110 - (hour // 4) * 5)
+        # Vitals normalize over time
+        rr = max(14, 24 - (hour // 4) * 2)
+        spo2 = min(99, 88 + (hour // 4) * 2)
+        hr = max(68, 110 - (hour // 4) * 5)
+        temp = round(random.uniform(36.4, 37.0), 1)
+    else:
+        # Stable — small natural fluctuation
+        temp = round(random.uniform(36.4, 37.2), 1)
+    
+    # Add realistic physiological jitter
+    rr = max(8, rr + random.randint(-2, 2))
+    spo2 = min(100, max(80, spo2 + random.randint(-1, 1)))
+    sbp = max(70, sbp + random.randint(-5, 5))
+    hr = max(50, hr + random.randint(-4, 4))
     
     return {
         "9279-1": rr,    # RR
@@ -86,21 +96,30 @@ async def seed_patient_scenario(s: dict):
 
     # 5. Allergies
     for a in s.get("allergies", []):
-        await fhir.create_allergy(pid, a["code"], a["name"])
+        await fhir.create_allergy(pid, a["code"], a["name"], criticality=a.get("criticality", "high"))
 
     # 6. Vitals (6 time points in last 24h)
     for h in [0, 4, 8, 12, 16, 20]:
-        v_time = (NOW - timedelta(hours=24-h)).isoformat()
+        # Add random minute offset to simulate real charting times
+        minute_jitter = random.randint(-30, 30)
+        v_time = (NOW - timedelta(hours=24-h, minutes=minute_jitter)).isoformat()
         vitals = get_vitals_for_trend(s.get("vitals_trend", "stable"), h)
         for code, val in vitals.items():
             await fhir.create_observation(pid, code, val, v_time, eid)
 
     # 7. Labs
     for i, lab in enumerate(s.get("labs", [])):
-        # Admission lab
-        await fhir.create_observation(pid, lab["code"], lab["value"] * 0.9, start_time, eid, display=lab["name"])
-        # Recent lab
-        await fhir.create_observation(pid, lab["code"], lab["value"], (NOW - timedelta(hours=2)).isoformat(), eid, display=lab["name"])
+        # Admission lab — randomize the baseline (±10-15% of current value)
+        baseline_factor = round(random.uniform(0.82, 0.95), 2)
+        admission_val = round(lab["value"] * baseline_factor, 1)
+        admission_time = (NOW - timedelta(days=p_info["day"], hours=random.randint(0, 4))).isoformat()
+        await fhir.create_observation(pid, lab["code"], admission_val, admission_time, eid, display=lab["name"])
+        
+        # Recent lab — add small jitter to the defined value (±5%)
+        jitter = round(lab["value"] * random.uniform(-0.05, 0.05), 1)
+        recent_val = round(lab["value"] + jitter, 1)
+        recent_time = (NOW - timedelta(hours=random.randint(1, 4))).isoformat()
+        await fhir.create_observation(pid, lab["code"], recent_val, recent_time, eid, display=lab["name"])
 
     # 8. Notes
     notes = s.get("notes", {})
@@ -124,8 +143,9 @@ async def seed_patient_scenario(s: dict):
     # 9. Meds
     for m in s.get("meds", []):
         await fhir.create_medication_request(pid, m, p_info["consultant"]["name"])
-        # Administration (one completed dose)
-        await fhir.create_medication_administration(pid, m["name"], "completed", (NOW - timedelta(hours=4)).isoformat(), random.choice(NURSES))
+        # Administration (only for active meds — one completed dose)
+        if m.get("status", "active") == "active":
+            await fhir.create_medication_administration(pid, m["name"], "completed", (NOW - timedelta(hours=4)).isoformat(), random.choice(NURSES))
 
     # 10. Audit History (Communications)
     if s["bed"] in ["1", "3", "7", "15"]:
@@ -147,7 +167,7 @@ async def main():
     # Save manifest so the server knows our patient IDs
     manifest_path = Path(__file__).parent / "ward_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2))
-    print(f"\n--- [SEED] MDS Ward 4 Seeding Complete! ---")
+    print(f"\n--- [SEED] MDS General Medicine Seeding Complete! ---")
     print(f"--- [SEED] Manifest saved: {manifest_path} ---")
     print(f"--- [SEED] {len(manifest)} patients registered ---")
 

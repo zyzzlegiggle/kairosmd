@@ -157,24 +157,29 @@ def generate_bundle():
         # 7. Labs
         for lab in s.get("labs", []):
             lab_id = str(uuid.uuid4())
+            resource = {
+                "resourceType": "Observation",
+                "id": lab_id,
+                "status": "final",
+                "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "laboratory"}]}],
+                "code": {"coding": [{"system": "http://loinc.org", "code": lab["code"]}], "text": lab["name"]},
+                "subject": {"reference": patient_ref},
+                "effectiveDateTime": (NOW - timedelta(hours=12)).isoformat(),
+                "valueQuantity": {"value": lab["value"]}
+            }
+            if lab.get("unit"):
+                resource["valueQuantity"]["unit"] = lab["unit"]
+            if lab.get("flag"):
+                resource["interpretation"] = [{"text": lab["flag"]}]
+            
             entries.append({
                 "fullUrl": f"urn:uuid:{lab_id}",
-                "resource": {
-                    "resourceType": "Observation",
-                    "id": lab_id,
-                    "status": "final",
-                    "category": [{"coding": [{"system": "http://terminology.hl7.org/CodeSystem/observation-category", "code": "laboratory"}]}],
-                    "code": {"coding": [{"system": "http://loinc.org", "code": lab["code"]}], "text": lab["name"]},
-                    "subject": {"reference": patient_ref},
-                    "effectiveDateTime": (NOW - timedelta(hours=12)).isoformat(),
-                    "valueQuantity": {"value": lab["value"], "unit": lab["unit"]},
-                    "interpretation": [{"text": lab.get("flag", "")}]
-                },
+                "resource": resource,
                 "request": {"method": "POST", "url": "Observation"}
             })
 
         # 8. Medications
-        for med in s.get("medications", []):
+        for med in s.get("meds", []):
             med_id = str(uuid.uuid4())
             entries.append({
                 "fullUrl": f"urn:uuid:{med_id}",

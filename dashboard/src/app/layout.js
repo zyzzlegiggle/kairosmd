@@ -18,7 +18,7 @@ export default function RootLayout({ children }) {
           {/* Top bar */}
           <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-border px-8 py-3 flex items-center justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-text-primary">General Medicine Ward 4</h2>
+              <h2 className="text-sm font-semibold text-text-primary">General Medicine Ward</h2>
               <p className="text-xs text-text-tertiary">
                 {new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
               </p>

@@ -213,7 +213,8 @@ async def warm_cache():
     """Pre-fetch all patient data on startup so the first request is instant."""
     print("\n--- [CACHE] Starting background cache warm-up... ---")
     try:
-        patient_ids = (await _get_ward_patient_ids(fhir))[:3]
+        client = get_fhir_client()
+        patient_ids = (await _get_ward_patient_ids(client))[:3]
         print(f"--- [CACHE] Warming data for {len(patient_ids)} patients... ---")
         
         for i, pid in enumerate(patient_ids):
@@ -221,7 +222,7 @@ async def warm_cache():
                 continue
             
             print(f"  [CACHE] {i+1}/{len(patient_ids)}: Processing {pid}...")
-            await _process_patient(pid, fhir)
+            await _process_patient(pid, client)
             
             # Small delay to prevent 429 during warming
             if i < len(patient_ids) - 1:
@@ -289,6 +290,7 @@ async def get_ward_round_summary(limit: int = 3) -> str:
     - AI-generated clinical briefing
 
     Sorted by clinical priority (high risk first, discharge ready last).
+    """
     client = get_fhir_client()
     all_patient_ids = await _get_ward_patient_ids(client)
     patient_ids = all_patient_ids[:limit]
@@ -609,6 +611,24 @@ async def get_drug_safety_info(drug_name: str, check_interaction_with: str = "")
     output = json.dumps(result, indent=2)
     print(f"\n--- [LOG] Drug safety lookup: {drug_name} ---")
     return output
+
+
+# =====================================================================
+# TOOL 8: get_dashboard_access
+# =====================================================================
+@mcp.tool()
+async def get_dashboard_access() -> str:
+    """Get direct links to the visual clinical dashboards.
+
+    Use this when the user specifically asks to 'open the dashboard',
+    'show me the board', or 'give me the full view'.
+    """
+    return json.dumps({
+        "main_ward_board": f"{config.DASHBOARD_BASE_URL}/dashboard",
+        "discharge_planning_board": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge",
+        "clinical_conflict_board": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts",
+        "message": "Click the links above to open the high-fidelity visual clinical interface."
+    }, indent=2)
 
 
 # -- Entry point -------------------------------------------------------

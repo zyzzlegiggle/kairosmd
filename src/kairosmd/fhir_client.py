@@ -198,6 +198,15 @@ class FHIRClient:
         # Client-side filter for active status
         return [ct for ct in results if ct.get("status") == "active"] or results
 
+    # -- Communications (Audit Trail) -----------------------------------
+    async def get_communications(self, patient_id: str) -> list[dict]:
+        """Fetch Communication resources (Audit Trail) for a patient."""
+        return await self.search("Communication", {
+            "subject": f"Patient/{patient_id}",
+            "_sort": "-sent",
+            "_count": "20",
+        })
+
     # -- Flags ----------------------------------------------------------
     async def get_flags(self, patient_id: str) -> list[dict]:
         results = await self.search("Flag", {
@@ -399,17 +408,6 @@ class FHIRClient:
         }
         return await self._post("DiagnosticReport", dr)
 
-    async def get_care_team(self, patient_id: str) -> list[dict]:
-        """Fetch CareTeam resources for a patient."""
-        return await self.search("CareTeam", {"subject": f"Patient/{patient_id}"})
-
-    async def get_communications(self, patient_id: str) -> list[dict]:
-        """Fetch Communication resources (Audit Trail) for a patient."""
-        return await self.search("Communication", {"subject": f"Patient/{patient_id}", "_sort": "-sent"})
-
-    async def get_diagnostic_reports(self, patient_id: str) -> list[dict]:
-        """Fetch DiagnosticReport resources for a patient."""
-        return await self.search("DiagnosticReport", {"subject": f"Patient/{patient_id}"})
 
     async def create_communication(self, patient_id: str, sender: str, recipient: str, payload: str, timestamp: str) -> dict:
         """Create a Communication resource (Audit Log)."""
