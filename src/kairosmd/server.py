@@ -11,6 +11,7 @@ Exposes 8 MCP tools:
   6. get_action_history       - Clinical audit trail
   7. get_drug_safety_info     - FDA label + FAERS lookup (OpenFDA)
   8. get_dashboard_access     - Visual dashboard links
+  9. apply_suggested_plan     - Apply AI plan to clinical notes
 """
 
 from __future__ import annotations
@@ -32,35 +33,8 @@ from kairosmd.ward_actions import (
 mcp = FastMCP("KairosMD MDS")
 
 def get_fhir_client() -> FHIRClient:
-    """Get FHIR client with SHARP extension support."""
-    headers = mcp.get_http_headers() or {}
-    
-    # SHARP Extension: Standardized Healthcare Agent Remote Protocol
-    # Headers: X-FHIR-Server-URL, X-FHIR-Access-Token, X-Patient-ID, X-FHIR-Context
-    base_url = headers.get("X-FHIR-Server-URL") or headers.get("x-fhir-server-url")
-    token = headers.get("X-FHIR-Access-Token") or headers.get("x-fhir-access-token")
-    context = headers.get("X-FHIR-Context") or headers.get("x-fhir-context")
-    
-    context_bundle = None
-    if context:
-        try:
-            import json as _json
-            context_bundle = _json.loads(context)
-            print(f"  [SHARP] Using provided FHIR context bundle ({len(context_bundle.get('entry', []))} resources)")
-        except Exception as e:
-            print(f"  [SHARP] Failed to parse X-FHIR-Context: {e}")
-
-    return FHIRClient(
-        base_url=base_url, 
-        access_token=token,
-        context_bundle=context_bundle
-    )
-
-
-def get_current_patient_id():
-    """Extract X-Patient-ID for SHARP 'Patient Mode'."""
-    headers = mcp.get_http_headers() or {}
-    return headers.get("X-Patient-ID") or headers.get("x-patient-id")
+    """Return a FHIR client using configured defaults."""
+    return FHIRClient()
 
 # Priority sort order for ward round
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
@@ -70,7 +44,7 @@ PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 # Actions are always re-attached fresh (they're in-memory, instant).
 import time
 
-CACHE_TTL = 3600  # 1 hour
+CACHE_TTL = 21600  # 6 hours
 _patient_cache: dict[str, tuple[float, dict]] = {}  # pid -> (timestamp, data)
 
 
@@ -352,14 +326,7 @@ async def get_ward_round_summary() -> str:
     Sorted by clinical priority (high risk first, discharge ready last).
     """
     client = get_fhir_client()
-    
-    # SHARP 'Patient Mode' support
-    sharp_pid = get_current_patient_id()
-    if sharp_pid:
-        print(f"  [SHARP] Patient Mode active: {sharp_pid}")
-        patient_ids = [sharp_pid]
-    else:
-        patient_ids = await _get_ward_patient_ids(client)
+    patient_ids = await _get_ward_patient_ids(client)
 
     if not patient_ids:
         return json.dumps({
@@ -442,13 +409,7 @@ async def get_discharge_candidates() -> str:
     sorted by length of stay (longest first).
     """
     client = get_fhir_client()
-    
-    # SHARP 'Patient Mode' support
-    sharp_pid = get_current_patient_id()
-    if sharp_pid:
-        patient_ids = [sharp_pid]
-    else:
-        patient_ids = await _get_ward_patient_ids(client)
+    patient_ids = await _get_ward_patient_ids(client)
 
     candidates = []
     for i, pid in enumerate(patient_ids):
@@ -491,13 +452,7 @@ async def get_conflict_report() -> str:
     missed doses, and note-vs-data contradictions.
     """
     client = get_fhir_client()
-    
-    # SHARP 'Patient Mode' support
-    sharp_pid = get_current_patient_id()
-    if sharp_pid:
-        patient_ids = [sharp_pid]
-    else:
-        patient_ids = await _get_ward_patient_ids(client)
+    patient_ids = await _get_ward_patient_ids(client)
 
     conflict_patients = []
     for i, pid in enumerate(patient_ids):
@@ -535,8 +490,8 @@ async def get_conflict_report() -> str:
 # =====================================================================
 @mcp.tool()
 async def record_ward_action(
+    patient_id: str,
     action_type: str,
-    patient_id: str | None = None,
     detail: str = "",
     conflict_id: str = "",
     clinician: str = "Dr. Mike",
@@ -560,13 +515,6 @@ async def record_ward_action(
         conflict_id: If acknowledging a specific conflict, its ID.
         clinician: Name of the acting clinician.
     """
-    # SHARP 'Patient Mode' support
-    if not patient_id:
-        patient_id = get_current_patient_id()
-        
-    if not patient_id:
-        return "Error: No patient ID provided and no SHARP 'Patient Mode' detected."
-
     action = record_action(
         patient_id=patient_id,
         action_type=action_type,
@@ -702,26 +650,44 @@ async def get_drug_safety_info(drug_name: str, check_interaction_with: str = "")
 # =====================================================================
 @mcp.tool()
 async def get_dashboard_access() -> str:
-    """Get direct links to the Multidisciplinary Dashboard views."""
-    sharp_pid = get_current_patient_id()
-    
-    links = [
-        {"name": "Ward Summary Board", "url": f"{config.DASHBOARD_BASE_URL}/dashboard"},
-        {"name": "Discharge Planning Board", "url": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge"},
-        {"name": "Clinical Conflict Board", "url": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts"},
-    ]
-    
-    if sharp_pid:
-        links.append({
-            "name": f"Current Patient Detail ({sharp_pid})", 
-            "url": f"{config.DASHBOARD_BASE_URL}/dashboard/patient/{sharp_pid}"
-        })
+    """Get direct links to the visual clinical dashboards.
 
+    Use this when the user specifically asks to 'open the dashboard',
+    'show me the board', or 'give me the full view'.
+    """
     return json.dumps({
-        "status": "success",
-        "message": "Dashboard links generated.",
-        "links": links
+        "main_ward_board": f"{config.DASHBOARD_BASE_URL}/dashboard",
+        "discharge_planning_board": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge",
+        "clinical_conflict_board": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts",
+        "message": "Click the links above to open the high-fidelity visual clinical interface."
     }, indent=2)
+
+
+# =====================================================================
+# TOOL 9: apply_suggested_plan
+# =====================================================================
+@mcp.tool()
+async def apply_suggested_plan(
+    patient_id: str,
+    plan_text: str,
+    clinician: str = "Dr. Mike",
+) -> str:
+    """Apply the AI-suggested plan adjustments to the patient's clinical notes.
+
+    This tool takes a suggested plan (usually from the briefing) and 
+    persists it as a signed clinical note in the FHIR record.
+
+    Args:
+        patient_id: The FHIR Patient resource ID.
+        plan_text: The plan text to add to the notes.
+        clinician: Name of the acting clinician.
+    """
+    return await record_ward_action(
+        patient_id=patient_id,
+        action_type="clinical_note_added",
+        detail=f"Applied Suggested Plan: {plan_text}",
+        clinician=clinician
+    )
 
 
 # -- Entry point -------------------------------------------------------

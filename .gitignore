@@ -51,3 +51,6 @@ coverage.xml
 .hypothesis/
 .tox/
 .nox/
+
+project_notes.md
+SYSTEM_PROMPT.md

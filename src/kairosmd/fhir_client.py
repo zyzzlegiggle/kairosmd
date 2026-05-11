@@ -15,17 +15,11 @@ RETRY_DELAY = 2.0  # seconds, doubles on each retry
 
 
 class FHIRClient:
-    """Lightweight async wrapper around FHIR R4 REST API with SHARP context support."""
+    """Lightweight async wrapper around FHIR R4 REST API."""
 
-    def __init__(
-        self, 
-        base_url: str | None = None, 
-        access_token: str | None = None,
-        context_bundle: dict | None = None
-    ):
+    def __init__(self, base_url: str | None = None, access_token: str | None = None):
         self.base_url = (base_url or config.FHIR_BASE_URL).rstrip("/")
         self.access_token = access_token or config.FHIR_ACCESS_TOKEN
-        self.context_bundle = context_bundle
         self._client: httpx.AsyncClient | None = None
 
     # -- lifecycle ------------------------------------------------------
@@ -47,72 +41,33 @@ class FHIRClient:
             await self._client.aclose()
 
     # -- helpers --------------------------------------------------------
-    async def search(self, resource_type: str, params: dict) -> list[dict]:
-        """Execute a FHIR search. Checks context_bundle first, then retries on 429."""
-        
-        # Check SHARP Context Bundle first
-        if self.context_bundle:
-            results = []
-            entries = self.context_bundle.get("entry", [])
-            for entry in entries:
-                res = entry.get("resource", {})
-                if res.get("resourceType") != resource_type:
-                    continue
-                
-                # Simple param filtering (e.g. patient=ID)
-                match = True
-                for k, v in params.items():
-                    if k.startswith("_"): continue # Skip sort/count
-                    
-                    # Handle common FHIR search params
-                    if k == "patient" or k == "subject":
-                        # res["patient"]["reference"] == "Patient/ID" or "ID"
-                        ref = res.get(k, {}).get("reference", "")
-                        if v not in ref: match = False
-                    elif k == "practitioner":
-                        ref = res.get(k, {}).get("reference", "")
-                        if v not in ref: match = False
-                
-                if match:
-                    results.append(res)
-            
-            if results:
-                print(f"  [SHARP] Context Hit: {len(results)} {resource_type} resources")
-                return results
-
+    async def search(self, resource: str, params: dict) -> list[dict]:
+        """Execute a FHIR search with retry on 429."""
         client = await self._get_client()
         delay = RETRY_DELAY
         for attempt in range(MAX_RETRIES + 1):
-            resp = await client.get(f"/{resource_type}", params=params)
+            resp = await client.get(f"/{resource}", params=params)
             if resp.status_code == 429:
                 if attempt < MAX_RETRIES:
-                    print(f"  [FHIR] 429 on {resource_type}, retrying in {delay}s...")
+                    print(f"  [FHIR] 429 on {resource}, retrying in {delay}s...")
                     await asyncio.sleep(delay)
                     delay *= 2
                     continue
                 else:
-                    print(f"  [FHIR] 429 on {resource_type}, max retries reached")
+                    print(f"  [FHIR] 429 on {resource}, max retries reached")
                     return []
             if resp.status_code == 400:
-                print(f"  [FHIR] 400 Bad Request on {resource_type}. URL: {resp.url}")
+                print(f"  [FHIR] 400 Bad Request on {resource}. URL: {resp.url}")
+                print(f"  [FHIR] Response: {resp.text[:200]}")
                 return []
             resp.raise_for_status()
             bundle = resp.json()
             return [e["resource"] for e in bundle.get("entry", [])]
         return []
 
-    async def _read(self, resource_type: str, resource_id: str) -> dict:
-        """Read a single FHIR resource. Checks context_bundle first."""
-        if self.context_bundle:
-            entries = self.context_bundle.get("entry", [])
-            for entry in entries:
-                res = entry.get("resource", {})
-                if res.get("resourceType") == resource_type and res.get("id") == resource_id:
-                    print(f"  [SHARP] Context Hit: {resource_type}/{resource_id}")
-                    return res
-
+    async def _read(self, resource: str, resource_id: str) -> dict:
         client = await self._get_client()
-        resp = await client.get(f"/{resource_type}/{resource_id}")
+        resp = await client.get(f"/{resource}/{resource_id}")
         resp.raise_for_status()
         return resp.json()
 

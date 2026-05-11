@@ -1,10 +1,10 @@
 "use client";
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
-import { callMCPTool, invalidatePatientCache } from "@/lib/mcp";
+import { callMCPTool, invalidatePatientCache } from "../../../../lib/mcp";
 import dynamic from "next/dynamic";
 
-const VitalChart = dynamic(() => import("@/components/VitalChart"), { ssr: false });
+const VitalChart = dynamic(() => import("../../../../components/VitalChart"), { ssr: false });
 
 /* ── Tiny helpers ─────────────────────────────────────────────── */
 
@@ -178,16 +178,30 @@ export default function PatientDetailPage({ params }) {
         <div className="flex items-start justify-between mb-6">
           <div>
             <h2 className="text-2xl font-black text-text-primary tracking-tight">{data.name}</h2>
-            <div className="flex items-center gap-2 mt-1">
-              <Badge variant={riskColor}>NEWS2 {news2.total_score ?? "--"}</Badge>
-              {hasAlerts && <Badge variant="critical">{alerts.filter(a => !a.acknowledged).length} Active Conflict{alerts.filter(a => !a.acknowledged).length !== 1 ? "s" : ""}</Badge>}
-              
-              {/* Condensed Allergies in Header */}
-              {uniqueAllergies.map((a, i) => (
-                <span key={i} className={`text-[9px] font-black px-2 py-0.5 rounded border uppercase flex items-center gap-1 ${a.criticality === 'high' ? 'bg-clinical-critical/10 border-clinical-critical/20 text-clinical-critical' : 'bg-surface-secondary border-border text-text-secondary'}`}>
-                  <span className="opacity-50">⚠️</span> {a.name}
-                </span>
-              ))}
+            <div className="flex items-center gap-3 mt-4">
+              {/* NEWS2 Score Card */}
+              <div className={`p-3 rounded-2xl border-2 flex flex-col items-center min-w-[90px] shadow-sm ${news2.risk_level === 'HIGH' ? 'bg-clinical-critical-bg border-clinical-critical text-clinical-critical' : news2.risk_level === 'MEDIUM' ? 'bg-clinical-warning-bg border-clinical-warning text-clinical-warning' : 'bg-clinical-normal-bg border-clinical-normal text-clinical-normal'}`}>
+                <span className="text-[9px] font-black uppercase tracking-widest mb-1 opacity-60">NEWS2</span>
+                <span className="text-2xl font-black leading-none">{news2.total_score ?? "--"}</span>
+              </div>
+
+              {/* Active Conflicts Card */}
+              <div className={`p-3 rounded-2xl border-2 flex flex-col items-center min-w-[90px] shadow-sm ${alerts.filter(a => !a.acknowledged).length > 0 ? 'bg-clinical-critical-bg border-clinical-critical text-clinical-critical' : 'bg-surface-secondary border-border text-text-tertiary'}`}>
+                <span className="text-[9px] font-black uppercase tracking-widest mb-1 opacity-60">Conflicts</span>
+                <span className="text-2xl font-black leading-none">{alerts.filter(a => !a.acknowledged).length}</span>
+              </div>
+
+              {/* Allergies Summary Card */}
+              <div className={`p-3 rounded-2xl border-2 flex flex-col min-w-[140px] shadow-sm ${uniqueAllergies.some(a => a.criticality === 'high') ? 'bg-clinical-critical-bg border-clinical-critical text-clinical-critical' : 'bg-surface-secondary border-border text-text-secondary'}`}>
+                <span className="text-[9px] font-black uppercase tracking-widest mb-1 opacity-60 text-center">Allergies</span>
+                <div className="flex flex-wrap justify-center gap-1.5 mt-0.5">
+                  {uniqueAllergies.length > 0 ? uniqueAllergies.map((a, i) => (
+                    <span key={i} className={`text-[10px] font-bold uppercase ${a.criticality === 'high' ? 'text-clinical-critical' : 'text-text-primary'}`}>
+                      {a.name}{i < uniqueAllergies.length - 1 ? "," : ""}
+                    </span>
+                  )) : <span className="text-[10px] font-bold uppercase italic opacity-40">None recorded</span>}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -255,7 +269,7 @@ export default function PatientDetailPage({ params }) {
         {/* Vitals Chart — 2/3 width */}
         <div className="col-span-2">
           {data.vital_trends?.length > 0 ? (
-            <Card title="Vital Signs — 24h Trend">
+            <Card title="Vital Signs (24h)">
               <VitalChart trends={data.vital_trends} />
             </Card>
           ) : (
@@ -264,7 +278,7 @@ export default function PatientDetailPage({ params }) {
         </div>
 
         {/* Discharge Status — 1/3 width (Swapped from sidebar) */}
-        <Card title="Discharge Status">
+        <Card title="Discharge Eligibility">
           <div className="mb-3 flex items-center justify-between">
             <Badge variant={discharge.status === "Ready" ? "success" : discharge.status === "Requires Review" ? "warning" : "default"}>
               {discharge.status || "--"}
@@ -356,8 +370,17 @@ export default function PatientDetailPage({ params }) {
 
               {/* Plan */}
               {briefing.suggested_plan_adjustments && (
-                <div className="bg-blue-50 border border-blue-100 rounded-lg p-3">
-                  <h4 className="text-[10px] font-bold text-clinical-info uppercase tracking-widest mb-1.5">Suggested Plan</h4>
+                <div className="bg-clinical-info-bg border border-clinical-info-border rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <h4 className="text-[10px] font-bold text-clinical-info uppercase tracking-widest">Suggested Plan</h4>
+                    <button
+                      onClick={() => act("clinical_note_added", `Applied Suggested Plan: ${briefing.suggested_plan_adjustments}`)}
+                      disabled={actionLoading}
+                      className="text-[9px] font-black bg-clinical-info text-white px-2 py-0.5 rounded-md uppercase hover:bg-blue-700 transition-colors cursor-pointer disabled:opacity-40 flex items-center gap-1"
+                    >
+                      <span>+</span> Add to Notes
+                    </button>
+                  </div>
                   <p className="text-sm text-text-primary leading-relaxed">{briefing.suggested_plan_adjustments}</p>
                 </div>
               )}
@@ -383,61 +406,6 @@ export default function PatientDetailPage({ params }) {
           </Card>
 
 
-          {/* Conflicts (only if any exist) */}
-          {hasAlerts && (
-            <Card
-              title={`Conflicts & Safety Flags`}
-              accent="border-l-4 border-l-clinical-critical"
-              headerRight={<Badge variant="critical">{alerts.filter(a => !a.acknowledged).length} Active Conflict{alerts.filter(a => !a.acknowledged).length !== 1 ? "s" : ""}</Badge>}
-            >
-              <div className="space-y-4">
-                {/* Scrollable list for rule-based alerts */}
-                {alerts.length > 0 && (
-                  <div className="max-h-[200px] overflow-y-auto pr-1 custom-scrollbar">
-                    {alerts.map((c, i) => {
-                      const ack = c.acknowledged;
-                      return (
-                        <div key={i} className={`flex items-start justify-between gap-3 py-2.5 ${ack ? "opacity-30" : ""} ${i < alerts.length - 1 ? "border-b border-border-light" : ""}`}>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${ack ? "bg-text-tertiary" : "bg-clinical-critical"}`} />
-                              <span className={`text-xs ${ack ? "text-text-tertiary line-through" : "text-text-primary font-bold"}`}>
-                                {c.message}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 mt-0.5 ml-3.5">
-                              <span className="text-[9px] font-black text-clinical-critical/70 uppercase tracking-tighter">{c.severity}</span>
-                              <span className="text-[9px] text-text-tertiary uppercase tabular-nums">Ref: MDT-RULE-0{i + 1}</span>
-                            </div>
-                          </div>
-                          {!ack && (
-                            <button
-                              onClick={() => act("conflict_acknowledged", `Reviewed: ${c.message?.slice(0, 80)}`, c.conflict_id)}
-                              disabled={actionLoading}
-                              className="text-[9px] font-bold text-clinical-critical border border-clinical-critical px-2 py-0.5 rounded hover:bg-clinical-critical hover:text-white transition-all shrink-0 cursor-pointer"
-                            >
-                              ACK
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Compact Safety Flags */}
-                {flags.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 pt-3 border-t border-border-light">
-                    {flags.map((f, i) => (
-                      <span key={i} className="text-[9px] font-black text-clinical-warning bg-clinical-warning-bg/50 border border-clinical-warning-border/30 px-2 py-0.5 rounded-md uppercase flex items-center gap-1">
-                        <span className="text-xs">!</span> {typeof f === 'string' ? f : (f?.text || f?.code || JSON.stringify(f))}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </Card>
-          )}
         </div>
 
         {/* RIGHT — Discharge + Drug Safety (1/3) */}
@@ -512,65 +480,67 @@ export default function PatientDetailPage({ params }) {
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          FIXED WIDGET — Clinical Notes (Bottom Right)
+          FIXED WIDGETS — Floating UI
          ══════════════════════════════════════════════════════════ */}
+      <SafetyAlertsWidget alerts={alerts} flags={flags} onAck={(c) => act("conflict_acknowledged", `Reviewed: ${c.message?.slice(0, 80)}`, c.conflict_id)} actionLoading={actionLoading} />
       <ClinicalNotesWidget notes={clinicalNotes} />
 
       {/* ══════════════════════════════════════════════════════════
           STICKY NAVIGATOR — Bottom Center (White Theme)
          ══════════════════════════════════════════════════════════ */}
-      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none">
-        <div className="bg-white border border-border rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] p-2.5 flex items-center justify-between pointer-events-auto">
-          {/* Prev Button */}
-          <Link
-            href={prevPatient ? `/dashboard/patient/${prevPatient.patient_id}` : "#"}
-            className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all ${prevPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
-          >
-            <span className="text-xl">←</span>
-          </Link>
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 w-72 pointer-events-none">
+        <div className="bg-white border border-border rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.25)] p-5 flex flex-col gap-5 pointer-events-auto backdrop-blur-xl bg-white/95">
+          {/* Navigation Row */}
+          <div className="flex items-center justify-between">
+            <Link
+              href={prevPatient ? `/dashboard/patient/${prevPatient.patient_id}` : "#"}
+              className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-all shadow-sm ${prevPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
+            >
+              <span className="text-xl">←</span>
+            </Link>
 
-          {/* Patient Quick Info */}
-          <div className="flex-1 px-6 flex items-center justify-between gap-4">
-            <div className="text-left">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-black bg-text-primary text-white px-1.5 py-0.5 rounded uppercase">
-                  {enc.bed?.startsWith('Bed') ? enc.bed : `Bed ${enc.bed}`}
-                </span>
-                <h4 className="text-sm font-bold text-text-primary truncate max-w-[140px]">{data.name}</h4>
-              </div>
-              <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-tight mt-0.5 truncate max-w-[180px]">
-                Diagnosis: {enc.admitting_diagnosis}
-              </p>
-            </div>
-
-            <div className="text-right">
-              <div className="flex items-center justify-end gap-2">
-                <span className={`text-[10px] font-black uppercase ${news2.risk_level === 'HIGH' ? 'text-clinical-critical' : 'text-clinical-normal'}`}>
-                  NEWS2 {news2.total_score}
-                </span>
-                <span className="text-[10px] font-bold text-text-tertiary">Day {enc.length_of_stay}</span>
-              </div>
-              <span className="text-[9px] text-text-tertiary tabular-nums font-bold">
-                {currentIdx + 1} / {wardList.length} INPATIENTS
+            <div className="flex flex-col items-center">
+              <span className="text-[10px] font-black bg-text-primary text-white px-3 py-1 rounded-full uppercase mb-1 shadow-sm">
+                {enc.bed?.startsWith('Bed') ? enc.bed : `Bed ${enc.bed}`}
+              </span>
+              <span className="text-[8px] font-black text-text-tertiary tracking-widest">
+                {currentIdx + 1} / {wardList.length}
               </span>
             </div>
-          </div>
 
-          {/* Next Button */}
-          <div className="flex items-center gap-2">
             <Link
               href={nextPatient ? `/dashboard/patient/${nextPatient.patient_id}` : "#"}
-              className={`w-11 h-11 flex items-center justify-center rounded-xl transition-all ${nextPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
+              className={`w-11 h-11 flex items-center justify-center rounded-2xl transition-all shadow-sm ${nextPatient ? 'bg-surface-secondary hover:bg-border text-text-primary cursor-pointer' : 'opacity-20 cursor-not-allowed'}`}
             >
               <span className="text-xl">→</span>
             </Link>
-
-            <div className="w-px h-6 bg-border mx-1" />
-
-            <Link href="/dashboard" className="w-11 h-11 flex items-center justify-center rounded-xl bg-clinical-info text-white hover:bg-blue-700 transition-all shadow-md">
-              <span className="text-lg">⊞</span>
-            </Link>
           </div>
+
+          {/* Patient Context Block */}
+          <div className="text-center px-2">
+            <h4 className="text-base font-black text-text-primary tracking-tight leading-tight">{data.name}</h4>
+            <p className="text-[10px] font-bold text-text-tertiary uppercase tracking-normal mt-1 line-clamp-1">
+              {enc.admitting_diagnosis}
+            </p>
+          </div>
+
+          {/* Stats Divider (The "Longer" part) */}
+          <div className="grid grid-cols-2 gap-4 py-3 border-y border-border-light">
+            <div className="text-center">
+              <p className="text-[8px] font-black text-text-tertiary uppercase tracking-widest mb-0.5">Stay</p>
+              <p className="text-[10px] font-bold text-text-primary">Day {enc.length_of_stay}</p>
+            </div>
+            <div className="text-center">
+              <p className="text-[8px] font-black text-text-tertiary uppercase tracking-widest mb-0.5">Lead</p>
+              <p className="text-[10px] font-bold text-text-primary truncate">{data.consultant?.split(' ').pop()}</p>
+            </div>
+          </div>
+
+          {/* Action Row */}
+          <Link href="/dashboard" className="w-full py-3 bg-clinical-info text-white rounded-2xl flex items-center justify-center gap-3 hover:bg-blue-700 transition-all shadow-[0_4px_15px_rgba(37,99,235,0.3)] group">
+            <span className="text-lg group-hover:scale-110 transition-transform">⊞</span>
+            <span className="text-[10px] font-black uppercase tracking-wider">Dashboard</span>
+          </Link>
         </div>
       </div>
 
@@ -585,20 +555,20 @@ function ClinicalNotesWidget({ notes }) {
   const [minimized, setMinimized] = useState(true);
 
   return (
-    <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ease-in-out flex flex-col ${minimized ? "w-48 h-10" : "w-80 h-96"}`}>
+    <div className={`fixed bottom-6 right-6 z-50 transition-all duration-300 ease-in-out flex flex-col ${minimized ? "w-48 h-11" : "w-80 h-96"}`}>
       <div
         onClick={() => setMinimized(!minimized)}
-        className="bg-clinical-info text-white px-4 py-2.5 rounded-t-xl cursor-pointer flex items-center justify-between shadow-lg"
+        className={`bg-clinical-info text-white px-4 py-2.5 cursor-pointer flex items-center justify-between shadow-[0_10px_30px_rgba(59,130,246,0.3)] transition-all hover:scale-[1.02] active:scale-[0.98] ${minimized ? "rounded-xl" : "rounded-t-xl"}`}
       >
         <span className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
           Clinical Notes
         </span>
-        <span className="text-xs">{minimized ? "▲" : "▼"}</span>
+        <span className="text-xs font-black">{minimized ? "▲" : "▼"}</span>
       </div>
 
       {!minimized && (
-        <div className="bg-white border-x border-b border-border p-4 rounded-b-xl shadow-2xl flex-1 overflow-y-auto custom-scrollbar backdrop-blur-sm bg-white/95">
+        <div className="bg-white border-x border-b border-border p-4 rounded-b-xl shadow-2xl flex-1 overflow-y-auto custom-scrollbar backdrop-blur-md bg-white/95">
           {notes?.length > 0 ? (
             <div className="space-y-4">
               {notes.map((n, i) => (
@@ -621,6 +591,88 @@ function ClinicalNotesWidget({ notes }) {
     </div>
   );
 }
+
+/* ── Fixed Safety & Alerts Widget (Top Right) ──────────────── */
+
+function SafetyAlertsWidget({ alerts, flags, onAck, actionLoading }) {
+  const [minimized, setMinimized] = useState(false);
+  const activeAlerts = alerts.filter(a => !a.acknowledged);
+  const totalCount = activeAlerts.length + flags.length;
+
+  if (totalCount === 0) return null;
+
+  return (
+    <div className={`fixed bottom-6 left-[280px] z-50 transition-all duration-300 ease-in-out flex flex-col ${minimized ? "w-48 h-11" : "w-80 h-96"}`}>
+      <div
+        onClick={() => setMinimized(!minimized)}
+        className={`bg-clinical-critical text-white px-4 py-2.5 cursor-pointer flex items-center justify-between shadow-[0_10px_30px_rgba(239,68,68,0.3)] transition-all hover:scale-[1.02] active:scale-[0.98] ${minimized ? "rounded-xl" : "rounded-t-xl"}`}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs animate-bounce">⚠️</span>
+          <span className="text-[11px] font-bold uppercase tracking-wider">
+            Safety & Conflicts
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="bg-white/20 text-[10px] px-1.5 py-0.5 rounded-full font-black">{totalCount}</span>
+          <span className="text-xs">{minimized ? "▲" : "▼"}</span>
+        </div>
+      </div>
+
+      {!minimized && (
+        <div className="bg-white border-x border-b border-border p-3 rounded-b-xl shadow-2xl flex-1 overflow-hidden backdrop-blur-md bg-white/95">
+          <div className="space-y-3 h-full overflow-y-auto pr-1 custom-scrollbar">
+            {/* Rule Alerts */}
+            {alerts.length > 0 && (
+              <div className="space-y-3">
+                {alerts.map((c, i) => {
+                  const ack = c.acknowledged;
+                  return (
+                    <div key={i} className={`flex items-start justify-between gap-3 p-2 rounded-lg transition-all ${ack ? "opacity-30 bg-surface-secondary" : "bg-clinical-critical/5 border border-clinical-critical/10"}`}>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          {!ack && <span className="w-1.5 h-1.5 rounded-full bg-clinical-critical shrink-0 animate-pulse" />}
+                          <span className={`text-[11px] ${ack ? "text-text-tertiary line-through" : "text-text-primary font-bold"}`}>
+                            {c.message}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1 ml-3.5">
+                          <span className="text-[8px] font-black text-clinical-critical/70 uppercase tracking-tighter">{c.severity}</span>
+                        </div>
+                      </div>
+                      {!ack && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onAck(c); }}
+                          disabled={actionLoading}
+                          className="text-[10px] font-bold bg-clinical-critical text-white w-6 h-6 flex items-center justify-center rounded-full hover:bg-red-700 transition-all shrink-0 cursor-pointer shadow-sm active:translate-y-px"
+                          title="Acknowledge Conflict"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Safety Flags */}
+            {flags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-3 border-t border-border-light">
+                {flags.map((f, i) => (
+                  <span key={i} className="text-[9px] font-black text-clinical-warning bg-clinical-warning-bg/40 border border-clinical-warning-border/20 px-2 py-1 rounded-md uppercase flex items-center gap-1">
+                    <span className="text-xs">!</span> {typeof f === 'string' ? f : (f?.text || f?.code)}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 /* ── Drug warning (collapsible) ──────────────────────────────── */
 
