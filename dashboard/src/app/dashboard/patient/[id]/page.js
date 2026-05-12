@@ -69,7 +69,7 @@ export default function PatientDetailPage({ params }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState("Synchronizing FHIR Clinical Record...");
+  const [syncMessage, setSyncMessage] = useState("Synchronizing FHIR...");
   const [refreshing, setRefreshing] = useState(false);
   const [toast, setToast] = useState("");
   const [noteInput, setNoteInput] = useState("");
@@ -107,7 +107,7 @@ export default function PatientDetailPage({ params }) {
   const fetchData = async (isInitial = false) => {
     if (isInitial) setLoading(true);
     else setRefreshing(true);
-    setSyncMessage("Synchronizing FHIR Clinical Record...");
+    setSyncMessage("Synchronizing FHIR...");
     setSyncing(true);
     try {
       const result = await callMCPTool("get_patient_ward_detail", { patient_id: id });
@@ -158,10 +158,10 @@ export default function PatientDetailPage({ params }) {
               <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse delay-75" />
               <div className="w-1.5 h-1.5 bg-white rounded-full animate-pulse delay-150" />
             </div>
-            <span className="text-xs font-black uppercase tracking-[0.2em]">Synchronizing FHIR Clinical Engine</span>
+            <span className="text-xs font-black uppercase tracking-[0.2em]">Synchronizing FHIR</span>
           </div>
         </div>
-        
+
         <div className="flex flex-col items-center gap-6 opacity-20">
           <div className="w-24 h-24 border-8 border-clinical-info border-t-transparent rounded-full animate-spin" />
         </div>
@@ -637,7 +637,7 @@ function ClinicalNotesWidget({ notes }) {
 /* ── Fixed Safety & Alerts Widget (Top Right) ──────────────── */
 
 function SafetyAlertsWidget({ alerts, flags, onAck, actionLoading }) {
-  const [minimized, setMinimized] = useState(false);
+  const [minimized, setMinimized] = useState(true);
   const activeAlerts = alerts.filter(a => !a.acknowledged);
   const totalCount = activeAlerts.length + flags.length;
 

@@ -216,11 +216,11 @@ async def warm_cache():
         patient_ids = await _get_ward_patient_ids(client)
         print(f"--- [CACHE] Warming data for {len(patient_ids)} patients... ---")
         
-        for i, pid in enumerate(patient_ids):
+        for i, pid in enumerate(patient_ids[:2]):
             if _get_cached(pid):
                 continue
             
-            print(f"  [CACHE] {i+1}/{len(patient_ids)}: Processing {pid}...")
+            print(f"  [CACHE] {i+1}/2: Processing {pid}...")
             await _process_patient(pid, client)
             
             # Small delay to prevent 429 during warming
@@ -354,13 +354,13 @@ async def get_ward_round_summary() -> str:
             "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
         })
 
-    # Process patients sequentially with rate limiting
+    # Process patients sequentially with rate limiting (limited to 2 for testing)
     ward_list = []
-    for i, pid in enumerate(patient_ids):
-        print(f"  Processing patient {i+1}/{len(patient_ids)} ({pid})...")
+    for i, pid in enumerate(patient_ids[:2]):
+        print(f"  Processing patient {i+1}/2 ({pid})...")
         entry = await _process_patient(pid, client)
         ward_list.append(entry)
-        if i < len(patient_ids) - 1:
+        if i < 1:
             await asyncio.sleep(1.0)
 
     ward_list = _sort_ward_list(ward_list)
@@ -432,12 +432,12 @@ async def get_discharge_candidates() -> str:
     patient_ids = await _get_ward_patient_ids(client)
 
     candidates = []
-    for i, pid in enumerate(patient_ids):
+    for i, pid in enumerate(patient_ids[:2]):
         entry = await _process_patient(pid, client)
         status = entry.get("discharge", {}).get("status", "")
         if status in ("Ready", "Requires Review"):
             candidates.append(entry)
-        if i < len(patient_ids) - 1:
+        if i < 1:
             await asyncio.sleep(1.0)
 
     # Sort by length of stay descending
@@ -475,11 +475,11 @@ async def get_conflict_report() -> str:
     patient_ids = await _get_ward_patient_ids(client)
 
     conflict_patients = []
-    for i, pid in enumerate(patient_ids):
+    for i, pid in enumerate(patient_ids[:2]):
         entry = await _process_patient(pid, client)
         if entry.get("conflict_count", 0) > 0:
             conflict_patients.append(entry)
-        if i < len(patient_ids) - 1:
+        if i < 1:
             await asyncio.sleep(1.0)
 
     # Sort by conflict count descending
