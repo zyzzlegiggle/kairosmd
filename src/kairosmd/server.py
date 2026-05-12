@@ -551,6 +551,7 @@ async def record_ward_action(
         "status": "recorded",
         "action": action,
         "message": f"Action '{action_type}' recorded and persisted to FHIR for patient {patient_id}",
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/patient/{patient_id}",
     }, indent=2)
 
     print(f"\n--- [LOG] Action recorded: {action_type} for {patient_id} ---")
@@ -640,6 +641,7 @@ async def get_drug_safety_info(drug_name: str, check_interaction_with: str = "")
                 "top_reactions_together": combo.get("top_reactions_together", []),
             }
 
+    result["dashboard_url"] = f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts"
     output = json.dumps(result, indent=2)
     print(f"\n--- [LOG] Drug safety lookup: {drug_name} ---")
     return output
@@ -659,6 +661,7 @@ async def get_dashboard_access() -> str:
         "main_ward_board": f"{config.DASHBOARD_BASE_URL}/dashboard",
         "discharge_planning_board": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge",
         "clinical_conflict_board": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts",
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
         "message": "Click the links above to open the high-fidelity visual clinical interface."
     }, indent=2)
 

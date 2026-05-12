@@ -3,7 +3,8 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+from pathlib import Path
+load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env")
 
 # -- FHIR --------------------------------------------------------------
 # Defaults used when SHARP headers (X-FHIR-*) are not provided by the platform

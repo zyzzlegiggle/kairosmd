@@ -117,7 +117,8 @@ export default function PatientDetailPage({ params }) {
     } finally {
       setLoading(false);
       setRefreshing(false);
-      setSyncing(false);
+      // Slight delay before hiding to ensure UI rendering is complete
+      setTimeout(() => setSyncing(false), 800);
     }
   };
 
@@ -135,12 +136,14 @@ export default function PatientDetailPage({ params }) {
       });
       invalidatePatientCache(id);
       setToast(`Recorded: ${type.replace(/_/g, " ")}`);
-      fetchData(false);
+      // Await fetchData to keep the syncing indicator visible during refresh
+      await fetchData(false);
     } catch (e) {
       setToast(`Error: ${e.message}`);
     } finally {
       setActionLoading(false);
-      setSyncing(false);
+      // Slight delay before hiding to ensure UI rendering is complete
+      setTimeout(() => setSyncing(false), 800);
     }
   };
 
