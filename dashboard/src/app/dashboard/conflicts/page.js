@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { callMCPTool } from "../../shared/mcp.js";
+import { callMCPTool } from "../../../shared/mcp.js";
 
 function ConflictRow({ conflict, patientId, patientName, bed }) {
   const urgencyColors = {

@@ -84,6 +84,26 @@ def _attach_actions(pid: str, data: dict) -> dict:
     result["actions"] = actions
     result["escalation_status"] = escalation
     result["discharge_override"] = discharge_override
+
+    # Merge in-memory actions into clinical notes for instant UI feedback
+    # (Bypasses FHIR indexing latency)
+    all_notes = list(result.get("clinical_notes", []))
+    for a in actions:
+        if a["action_type"] in ("clinical_note_added", "conflict_acknowledged"):
+            # Avoid duplicate if it already synced to FHIR and came back in clinical_notes
+            text = a["detail"] if a["action_type"] == "clinical_note_added" else f"Acknowledged: {a['detail']}"
+            if not any(n.get("text") == text for n in all_notes):
+                all_notes.append({
+                    "date": a["timestamp"],
+                    "author": a["clinician"],
+                    "text": text,
+                    "is_unsynced": True # Optional hint for UI
+                })
+    
+    # Sort notes by date descending
+    all_notes.sort(key=lambda x: x.get("date", ""), reverse=True)
+    result["clinical_notes"] = all_notes
+    
     return result
 
 
