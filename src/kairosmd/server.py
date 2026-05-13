@@ -727,7 +727,9 @@ def main():
     threading.Thread(target=background_warmer, daemon=True).start()
 
     if "--sse" in sys.argv:
-        print("Starting KairosMD MDS in SSE mode (default port 8000)")
-        mcp.run(transport="sse")
+        import os
+        port = int(os.getenv("PORT", 8000))
+        print(f"Starting KairosMD MDS in SSE mode on 0.0.0.0:{port}")
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
         mcp.run()
