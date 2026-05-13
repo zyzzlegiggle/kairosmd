@@ -734,9 +734,16 @@ def main():
         
         port = int(os.getenv("PORT", 8000))
         # FastMCP provides an 'sse_app()' method for Starlette integration
+        # We wrap it in a root Starlette app to provide a health check at /
+        from starlette.responses import JSONResponse
+        
+        async def health_check(request):
+            return JSONResponse({"status": "healthy", "service": "KairosMD"})
+
         app = mcp.sse_app()
+        app.add_route("/", health_check)
         
         print(f"Starting KairosMD MDS SSE on 0.0.0.0:{port}")
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=60)
     else:
         mcp.run()
