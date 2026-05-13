@@ -733,9 +733,8 @@ def main():
         from starlette.routing import Route, Mount
         
         port = int(os.getenv("PORT", 8000))
-        # FastMCP provides an 'as_app()' method in newer versions or we can access the underlying starlette app
-        # For compatibility, we use the mcp server's own starlette integration
-        app = mcp.as_app()
+        # FastMCP provides an 'sse_app()' method for Starlette integration
+        app = mcp.sse_app()
         
         print(f"Starting KairosMD MDS SSE on 0.0.0.0:{port}")
         uvicorn.run(app, host="0.0.0.0", port=port)
