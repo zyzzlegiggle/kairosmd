@@ -216,11 +216,11 @@ async def warm_cache():
         patient_ids = await _get_ward_patient_ids(client)
         print(f"--- [CACHE] Warming data for {len(patient_ids)} patients... ---")
         
-        for i, pid in enumerate(patient_ids[:2]):
+        for i, pid in enumerate(patient_ids):
             if _get_cached(pid):
                 continue
             
-            print(f"  [CACHE] {i+1}/2: Processing {pid}...")
+            print(f"  [CACHE] {i+1}/{len(patient_ids)}: Processing {pid}...")
             await _process_patient(pid, client)
             
             # Small delay to prevent 429 during warming
@@ -354,13 +354,13 @@ async def get_ward_round_summary() -> str:
             "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
         })
 
-    # Process patients sequentially with rate limiting (limited to 2 for testing)
+    # Process patients sequentially with rate limiting
     ward_list = []
-    for i, pid in enumerate(patient_ids[:2]):
-        print(f"  Processing patient {i+1}/2 ({pid})...")
+    for i, pid in enumerate(patient_ids):
+        print(f"  Processing patient {i+1}/{len(patient_ids)} ({pid})...")
         entry = await _process_patient(pid, client)
         ward_list.append(entry)
-        if i < 1:
+        if i < len(patient_ids) - 1:
             await asyncio.sleep(1.0)
 
     ward_list = _sort_ward_list(ward_list)
@@ -432,12 +432,12 @@ async def get_discharge_candidates() -> str:
     patient_ids = await _get_ward_patient_ids(client)
 
     candidates = []
-    for i, pid in enumerate(patient_ids[:2]):
+    for i, pid in enumerate(patient_ids):
         entry = await _process_patient(pid, client)
         status = entry.get("discharge", {}).get("status", "")
         if status in ("Ready", "Requires Review"):
             candidates.append(entry)
-        if i < 1:
+        if i < len(patient_ids) - 1:
             await asyncio.sleep(1.0)
 
     # Sort by length of stay descending
@@ -453,7 +453,7 @@ async def get_discharge_candidates() -> str:
         "date": date.today().isoformat(),
         "candidate_count": len(slim_candidates),
         "candidates": slim_candidates,
-        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge",
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
     })
 
     print(f"\n--- [LOG] Discharge Candidates: {len(slim_candidates)} ---")
@@ -475,11 +475,11 @@ async def get_conflict_report() -> str:
     patient_ids = await _get_ward_patient_ids(client)
 
     conflict_patients = []
-    for i, pid in enumerate(patient_ids[:2]):
+    for i, pid in enumerate(patient_ids):
         entry = await _process_patient(pid, client)
         if entry.get("conflict_count", 0) > 0:
             conflict_patients.append(entry)
-        if i < 1:
+        if i < len(patient_ids) - 1:
             await asyncio.sleep(1.0)
 
     # Sort by conflict count descending
@@ -498,7 +498,7 @@ async def get_conflict_report() -> str:
         "patients_with_conflicts": len(slim_conflict),
         "total_conflicts": total_conflicts,
         "patients": slim_conflict,
-        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts",
+        "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
     })
 
     print(f"\n--- [LOG] Conflict Report: {total_conflicts} conflicts ---")
@@ -535,6 +535,7 @@ async def record_ward_action(
         conflict_id: If acknowledging a specific conflict, its ID.
         clinician: Name of the acting clinician.
     """
+    fhir = get_fhir_client()
     action = record_action(
         patient_id=patient_id,
         action_type=action_type,
@@ -661,7 +662,7 @@ async def get_drug_safety_info(drug_name: str, check_interaction_with: str = "")
                 "top_reactions_together": combo.get("top_reactions_together", []),
             }
 
-    result["dashboard_url"] = f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts"
+    result["dashboard_url"] = f"{config.DASHBOARD_BASE_URL}/dashboard"
     output = json.dumps(result, indent=2)
     print(f"\n--- [LOG] Drug safety lookup: {drug_name} ---")
     return output
@@ -679,10 +680,8 @@ async def get_dashboard_access() -> str:
     """
     return json.dumps({
         "main_ward_board": f"{config.DASHBOARD_BASE_URL}/dashboard",
-        "discharge_planning_board": f"{config.DASHBOARD_BASE_URL}/dashboard/discharge",
-        "clinical_conflict_board": f"{config.DASHBOARD_BASE_URL}/dashboard/conflicts",
         "dashboard_url": f"{config.DASHBOARD_BASE_URL}/dashboard",
-        "message": "Click the links above to open the high-fidelity visual clinical interface."
+        "message": "Click the link above to open the visual clinical interface."
     }, indent=2)
 
 
