@@ -728,8 +728,16 @@ def main():
 
     if "--sse" in sys.argv:
         import os
+        import uvicorn
+        from starlette.applications import Starlette
+        from starlette.routing import Route, Mount
+        
         port = int(os.getenv("PORT", 8000))
-        print(f"Starting KairosMD MDS in SSE mode on 0.0.0.0:{port}")
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        # FastMCP provides an 'as_app()' method in newer versions or we can access the underlying starlette app
+        # For compatibility, we use the mcp server's own starlette integration
+        app = mcp.as_app()
+        
+        print(f"Starting KairosMD MDS SSE on 0.0.0.0:{port}")
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run()
