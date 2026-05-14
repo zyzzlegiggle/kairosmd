@@ -39,13 +39,38 @@ def get_fhir_client() -> FHIRClient:
 # Priority sort order for ward round
 PRIORITY_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
-# -- Server-side cache -------------------------------------------------
-# Caches FHIR + ward engine + LLM results per patient.
-# Actions are always re-attached fresh (they're in-memory, instant).
+import json as _json
 import time
+from pathlib import Path
 
-CACHE_TTL = 21600  # 6 hours
+CACHE_TTL = 86400  # 24 hours
+PERSISTENT_CACHE_PATH = Path(__file__).parent / "ward_cache.json"
 _patient_cache: dict[str, tuple[float, dict]] = {}  # pid -> (timestamp, data)
+
+
+def _load_persistent_cache():
+    """Load analyzed patient data from disk if available."""
+    global _patient_cache
+    if PERSISTENT_CACHE_PATH.exists():
+        try:
+            raw = PERSISTENT_CACHE_PATH.read_text()
+            data = _json.loads(raw)
+            # Convert back to our internal tuple format
+            _patient_cache = {k: (time.time(), v) for k, v in data.items()}
+            print(f"--- [CACHE] Loaded {len(_patient_cache)} patients from disk. ---")
+        except Exception as e:
+            print(f"--- [CACHE] Error loading disk cache: {e} ---")
+
+
+def _save_persistent_cache():
+    """Save current analyzed patient data to disk."""
+    try:
+        # Save only the data part, ignore the timestamp
+        serializable = {k: v[1] for k, v in _patient_cache.items()}
+        PERSISTENT_CACHE_PATH.write_text(_json.dumps(serializable, indent=2))
+        print(f"--- [CACHE] Saved {len(_patient_cache)} patients to disk. ---")
+    except Exception as e:
+        print(f"--- [CACHE] Error saving disk cache: {e} ---")
 
 
 def _get_cached(pid: str) -> dict | None:
@@ -228,6 +253,7 @@ async def warm_cache():
                 await asyncio.sleep(1.0)
                 
         print("--- [CACHE] Warm-up complete. All patients ready. ---\n")
+        _save_persistent_cache()
     except Exception as e:
         print(f"--- [CACHE] Warm-up failed: {e} ---")
 
@@ -723,6 +749,9 @@ def main():
         time.sleep(2)
         asyncio.run(warm_cache())
 
+    # Load existing cache from disk immediately
+    _load_persistent_cache()
+
     # Start warming in a background thread so it doesn't block mcp.run()
     threading.Thread(target=background_warmer, daemon=True).start()
 
@@ -731,14 +760,18 @@ def main():
         import uvicorn
         from starlette.applications import Starlette
         from starlette.routing import Route, Mount
+        from starlette.responses import JSONResponse
         
         port = int(os.getenv("PORT", 8000))
         # FastMCP provides an 'sse_app()' method for Starlette integration
         # We wrap it in a root Starlette app to provide a health check at /
-        from starlette.responses import JSONResponse
         
         async def health_check(request):
-            return JSONResponse({"status": "healthy", "service": "KairosMD"})
+            return JSONResponse({
+                "status": "healthy", 
+                "service": "KairosMD",
+                "cache_size": len(_patient_cache)
+            })
 
         app = mcp.sse_app()
         app.add_route("/", health_check)
