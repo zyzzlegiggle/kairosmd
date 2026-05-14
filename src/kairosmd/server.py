@@ -749,6 +749,11 @@ def main():
     import sys
     import threading
     import time
+    import os
+    import uvicorn
+    from starlette.responses import JSONResponse
+    from starlette.middleware import Middleware
+    from starlette.middleware.cors import CORSMiddleware
 
     def background_warmer():
         # Wait for the server to be fully up
@@ -762,15 +767,7 @@ def main():
     threading.Thread(target=background_warmer, daemon=True).start()
 
     if "--sse" in sys.argv:
-        import os
-        import uvicorn
-        from starlette.applications import Starlette
-        from starlette.routing import Route, Mount
-        from starlette.responses import JSONResponse
-        
         port = int(os.getenv("PORT", 8000))
-        # FastMCP provides an 'sse_app()' method for Starlette integration
-        # We wrap it in a root Starlette app to provide a health check at /
         
         async def health_check(request):
             return JSONResponse({
@@ -779,10 +776,24 @@ def main():
                 "cache_size": len(_patient_cache)
             })
 
+        # Add CORS middleware to allow any client to connect
+        middleware = [
+            Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+        ]
+        
         app = mcp.sse_app()
+        # Note: We wrap the app or add middleware to the existing Starlette app
+        app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
         app.add_route("/", health_check)
         
         print(f"Starting KairosMD MDS SSE on 0.0.0.0:{port}")
         uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=60)
     else:
-        mcp.run()
+        # If no arguments, we still want to default to SSE on cloud platforms
+        if os.getenv("PORT"):
+            print("PORT environment variable detected. Defaulting to SSE transport...")
+            # Re-call main with --sse simulated
+            sys.argv.append("--sse")
+            main()
+        else:
+            mcp.run()
