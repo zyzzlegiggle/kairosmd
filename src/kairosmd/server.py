@@ -745,6 +745,7 @@ async def apply_suggested_plan(
 
 
 # -- Entry point -------------------------------------------------------
+# -- Entry point -------------------------------------------------------
 def main():
     import sys
     import threading
@@ -752,18 +753,15 @@ def main():
     import os
     import time
     import uvicorn
-    from starlette.applications import Starlette
     from starlette.responses import JSONResponse
-    from starlette.middleware import Middleware
     from starlette.middleware.cors import CORSMiddleware
-    from starlette.routing import Route, Mount
-    from mcp.server.sse import SseServerTransport
 
     # 1. Start background warmer (only once)
     def background_warmer():
         print("--- [WARMER] Waiting for server to stabilize... ---")
-        time.sleep(5) # Give it more time on cloud environments
+        time.sleep(5)
         try:
+            # We need to run this in its own event loop
             asyncio.run(warm_cache())
         except Exception as e:
             print(f"--- [WARMER] Fatal error in warmer: {e} ---")
@@ -772,6 +770,7 @@ def main():
     _load_persistent_cache()
 
     # Determine if we should run SSE or StdIO
+    # We use a flag to prevent recursion if we re-call main
     is_sse = "--sse" in sys.argv or os.getenv("PORT") is not None
     port = int(os.getenv("PORT", 8000))
 
@@ -781,15 +780,11 @@ def main():
         # Start background warmer thread
         threading.Thread(target=background_warmer, daemon=True).start()
 
-        sse = SseServerTransport("/messages")
+        # Use the built-in sse_app from FastMCP
+        # This app already has /sse and /messages routes
+        app = mcp.sse_app()
 
-        async def handle_sse(request):
-            async with sse.connect_scope(request.scope, request.receive, request.send):
-                await mcp._server.handle_sse(sse)
-
-        async def handle_messages(request):
-            await sse.handle_post_message(request.scope, request.receive, request.send)
-
+        # Add Railway health check to the root
         async def health_check(request):
             return JSONResponse({
                 "status": "healthy",
@@ -797,27 +792,26 @@ def main():
                 "cache_size": len(_patient_cache),
                 "transport": "sse"
             })
+        
+        app.add_route("/", health_check)
 
-        routes = [
-            Route("/", endpoint=health_check),
-            Route("/sse", endpoint=handle_sse),
-            Route("/messages", endpoint=handle_messages, methods=["POST"]),
-        ]
-
-        # Use Middleware objects for Starlette initialization
-        middleware = [
-            Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-        ]
-
-        app = Starlette(
-            debug=True,
-            routes=routes,
-            middleware=middleware,
+        # Ensure CORS is allowed for all origins (PromptOpinion, etc.)
+        app.add_middleware(
+            CORSMiddleware, 
+            allow_origins=["*"], 
+            allow_methods=["*"], 
+            allow_headers=["*"]
         )
 
-        uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=60, proxy_headers=True, forwarded_allow_ips="*")
+        uvicorn.run(
+            app, 
+            host="0.0.0.0", 
+            port=port, 
+            timeout_keep_alive=60, 
+            proxy_headers=True, 
+            forwarded_allow_ips="*"
+        )
     else:
         # StdIO mode for local CLI usage
         print("--- [START] Starting KairosMD MDS in StdIO mode ---")
-        # In StdIO mode we don't start the warmer as it might interfere with CLI input/output
         mcp.run()
