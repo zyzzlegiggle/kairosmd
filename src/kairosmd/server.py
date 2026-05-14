@@ -748,52 +748,76 @@ async def apply_suggested_plan(
 def main():
     import sys
     import threading
-    import time
+    import asyncio
     import os
+    import time
     import uvicorn
+    from starlette.applications import Starlette
     from starlette.responses import JSONResponse
     from starlette.middleware import Middleware
     from starlette.middleware.cors import CORSMiddleware
+    from starlette.routing import Route, Mount
+    from mcp.server.sse import SseServerTransport
 
+    # 1. Start background warmer (only once)
     def background_warmer():
-        # Wait for the server to be fully up
-        time.sleep(2)
-        asyncio.run(warm_cache())
+        print("--- [WARMER] Waiting for server to stabilize... ---")
+        time.sleep(5) # Give it more time on cloud environments
+        try:
+            asyncio.run(warm_cache())
+        except Exception as e:
+            print(f"--- [WARMER] Fatal error in warmer: {e} ---")
 
-    # Load existing cache from disk immediately
+    # Load cache from disk
     _load_persistent_cache()
 
-    # Start warming in a background thread so it doesn't block mcp.run()
-    threading.Thread(target=background_warmer, daemon=True).start()
+    # Determine if we should run SSE or StdIO
+    is_sse = "--sse" in sys.argv or os.getenv("PORT") is not None
+    port = int(os.getenv("PORT", 8000))
 
-    if "--sse" in sys.argv:
-        port = int(os.getenv("PORT", 8000))
+    if is_sse:
+        print(f"--- [START] Starting KairosMD MDS in SSE mode on port {port} ---")
         
+        # Start background warmer thread
+        threading.Thread(target=background_warmer, daemon=True).start()
+
+        sse = SseServerTransport("/messages")
+
+        async def handle_sse(request):
+            async with sse.connect_scope(request.scope, request.receive, request.send):
+                await mcp._server.handle_sse(sse)
+
+        async def handle_messages(request):
+            await sse.handle_post_message(request.scope, request.receive, request.send)
+
         async def health_check(request):
             return JSONResponse({
-                "status": "healthy", 
+                "status": "healthy",
                 "service": "KairosMD",
-                "cache_size": len(_patient_cache)
+                "cache_size": len(_patient_cache),
+                "transport": "sse"
             })
 
-        # Add CORS middleware to allow any client to connect
+        routes = [
+            Route("/", endpoint=health_check),
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages", endpoint=handle_messages, methods=["POST"]),
+        ]
+
+        # Use Middleware objects for Starlette initialization
         middleware = [
             Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
         ]
-        
-        app = mcp.sse_app()
-        # Note: We wrap the app or add middleware to the existing Starlette app
-        app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-        app.add_route("/", health_check)
-        
-        print(f"Starting KairosMD MDS SSE on 0.0.0.0:{port}")
-        uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=60)
+
+        app = Starlette(
+            debug=True,
+            routes=routes,
+            middleware=middleware,
+        )
+
+        uvicorn.run(app, host="0.0.0.0", port=port, timeout_keep_alive=60, proxy_headers=True, forwarded_allow_ips="*")
     else:
-        # If no arguments, we still want to default to SSE on cloud platforms
-        if os.getenv("PORT"):
-            print("PORT environment variable detected. Defaulting to SSE transport...")
-            # Re-call main with --sse simulated
-            sys.argv.append("--sse")
-            main()
-        else:
-            mcp.run()
+        # StdIO mode for local CLI usage
+        print("--- [START] Starting KairosMD MDS in StdIO mode ---")
+        # In StdIO mode we don't start the warmer as it might interfere with CLI input/output
+        mcp.run()
