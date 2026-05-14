@@ -30,7 +30,13 @@ from kairosmd.ward_actions import (
     get_escalation_status, get_discharge_override,
 )
 
-mcp = FastMCP("KairosMD MDS")
+import os as _os
+_port = int(_os.getenv("PORT", 8000))
+mcp = FastMCP(
+    "KairosMD MDS",
+    host="0.0.0.0",
+    port=_port
+)
 
 def get_fhir_client() -> FHIRClient:
     """Return a FHIR client using configured defaults."""
