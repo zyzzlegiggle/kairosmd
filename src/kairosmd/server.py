@@ -40,10 +40,10 @@ mcp = FastMCP(
 
 # Support PromptOpinion FHIR extension
 # This allows the platform to inject clinical context (Patient ID, FHIR URL, etc.)
-mcp._server.capabilities.experimental = {
+mcp._mcp_server.capabilities.experimental = {
     "fhirContext": {}
 }
-mcp._server.capabilities.roots = {"listChanged": True} # Support for project file context
+mcp._mcp_server.capabilities.roots = {"listChanged": True} 
 
 def get_fhir_client() -> FHIRClient:
     """Return a FHIR client using configured defaults."""
