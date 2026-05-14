@@ -38,12 +38,19 @@ mcp = FastMCP(
     port=_port
 )
 
-# Support PromptOpinion FHIR extension
-# This allows the platform to inject clinical context (Patient ID, FHIR URL, etc.)
-mcp._mcp_server.capabilities.experimental = {
-    "fhirContext": {}
-}
-mcp._mcp_server.capabilities.roots = {"listChanged": True} 
+# Support PromptOpinion FHIR extension via monkey-patch
+# FastMCP doesn't expose experimental capabilities directly, so we wrap the internal method
+_original_get_caps = mcp._mcp_server.get_capabilities
+
+def _patched_get_capabilities(*args, **kwargs):
+    # Call original bound method (which doesn't need self)
+    caps = _original_get_caps()
+    # Advertise clinical and project context support
+    caps.experimental = {"fhirContext": {}}
+    caps.roots = {"listChanged": True}
+    return caps
+
+mcp._mcp_server.get_capabilities = _patched_get_capabilities
 
 def get_fhir_client() -> FHIRClient:
     """Return a FHIR client using configured defaults."""
